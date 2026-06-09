@@ -1,11 +1,33 @@
+# ============================================================================
+# MinerU Docker Compose (macOS & Linux 通用基础配置)
+# ============================================================================
+#
+# 启动方式：
+#   macOS / 无 GPU Linux：
+#     docker compose --profile gradio up -d
+#
+#   Linux + NVIDIA GPU：
+#     docker compose -f docker-compose.yaml -f docker-compose.gpu.yml up -d
+#
+# 构建镜像：
+#   docker compose build
+#   docker compose build --no-cache   # 强制重新构建
+# ============================================================================
+
+x-mineru-build: &mineru-build
+  build:
+    context: .
+    dockerfile: docker/global/Dockerfile
+  image: narrativeos/mineru:latest
+
 services:
   mineru-openai-server:
-    image: registry.cn-beijing.aliyuncs.com/futuremeng/mineru:latest
+    <<: *mineru-build
     container_name: mineru-openai-server
     restart: always
     profiles: ["openai-server"]
     ports:
-      - 30000:30000
+      - "30000:30000"
     environment:
       MINERU_MODEL_SOURCE: local
     entrypoint: mineru-openai-server
@@ -14,29 +36,22 @@ services:
       --port 30000
       --data-parallel-size 1
       --gpu-memory-utilization 0.5
-      # --data-parallel-size 2  # If using multiple GPUs, increase throughput using vllm's multi-GPU parallel mode
-      # --gpu-memory-utilization 0.5  # If running on a single GPU and encountering VRAM shortage, reduce the KV cache size by this parameter, if VRAM issues persist, try lowering it further to `0.4` or below.
     ulimits:
       memlock: -1
       stack: 67108864
-    ipc: host
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:30000/health || exit 1"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   mineru-api:
-    image: registry.cn-beijing.aliyuncs.com/futuremeng/mineru:latest
+    <<: *mineru-build
     container_name: mineru-api
     restart: always
     profiles: ["api"]
     ports:
-      - 8000:8000
+      - "8000:8000"
     environment:
       MINERU_MODEL_SOURCE: local
     entrypoint: mineru-api
@@ -47,33 +62,17 @@ services:
       --batch-max-convert-pages 100
       --data-parallel-size 1
       --gpu-memory-utilization 0.5
-      # parameters for vllm-engine
-      # --max-convert-pages 1500  # Maximum pages processed per document
-      # --batch-max-convert-pages 100  # Pages processed per batch; tune based on machine performance
-      # --data-parallel-size 2  # If using multiple GPUs, increase throughput using vllm's multi-GPU parallel mode
-      # --gpu-memory-utilization 0.5  # If running on a single GPU and encountering VRAM shortage, reduce the KV cache size by this parameter, if VRAM issues persist, try lowering it further to `0.4` or below.
     ulimits:
       memlock: -1
       stack: 67108864
-    ipc: host
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: [ "0" ]
-              capabilities: [ gpu ]
 
   mineru-gradio:
-    image: registry.cn-beijing.aliyuncs.com/futuremeng/mineru:latest
+    <<: *mineru-build
     container_name: mineru-gradio
     restart: always
-    # profiles: ["gradio"]
+    profiles: ["gradio"]
     ports:
-      - 7860:7860
-    # hot reload
-    # volumes:
-    #   - ./mineru:/gateway/mineru-src/mineru
+      - "7860:7860"
     environment:
       MINERU_MODEL_SOURCE: local
     entrypoint: mineru-gradio
@@ -85,20 +84,6 @@ services:
       --batch-max-convert-pages 100
       --data-parallel-size 1
       --gpu-memory-utilization 0.5
-      # --enable-api false  # If you want to disable the API, set this to false
-      # --max-convert-pages 20  # If you want to limit the number of pages for conversion, set this to a specific number
-      # --batch-max-convert-pages 100  # Pages processed per batch; tune based on machine performance
-      # parameters for vllm-engine
-      # --data-parallel-size 2  # If using multiple GPUs, increase throughput using vllm's multi-GPU parallel mode
-      # --gpu-memory-utilization 0.5  # If running on a single GPU and encountering VRAM shortage, reduce the KV cache size by this parameter, if VRAM issues persist, try lowering it further to `0.4` or below.
     ulimits:
       memlock: -1
       stack: 67108864
-    ipc: host
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: [ "0" ]
-              capabilities: [ gpu ]
