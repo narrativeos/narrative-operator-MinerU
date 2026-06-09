@@ -70,6 +70,9 @@ from mineru.utils.pdf_image_tools import shutdown_pdf_render_executor
 from mineru.version import __version__
 
 os.environ["TORCH_CUDNN_V8_API_DISABLED"] = "1"
+# 自动设置 HuggingFace 国内镜像（如果用户未手动设置）
+if not os.environ.get("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 log_level = os.getenv("MINERU_LOG_LEVEL", "INFO").upper()
 logger.remove()
 logger.add(sys.stderr, level=log_level)

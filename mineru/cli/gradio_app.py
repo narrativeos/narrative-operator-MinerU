@@ -22,6 +22,9 @@ from gradio_pdf import PDF
 from loguru import logger
 
 os.environ["TORCH_CUDNN_V8_API_DISABLED"] = "1"
+# 自动设置 HuggingFace 国内镜像（如果用户未手动设置）
+if not os.environ.get("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # 检测 Gradio 版本，用于兼容 Gradio 5 和 Gradio 6
 _gradio_major_version = int(gr.__version__.split('.')[0])
 IS_GRADIO_6 = _gradio_major_version >= 6
@@ -1475,7 +1478,7 @@ def update_doc_show(file_path):
     'max_convert_pages',
     type=int,
     help="Set the maximum number of pages to convert from PDF to Markdown.",
-    default=1000,
+    default=100000,
 )
 @click.option(
     '--server-name',

@@ -85,7 +85,8 @@ def get_local_api_startup_timeout_seconds(default: float = 300.0) -> float:
 LOCAL_API_STARTUP_TIMEOUT_SECONDS = get_local_api_startup_timeout_seconds()
 
 
-def get_task_result_timeout_seconds(default: float = 3600.0) -> float:
+def get_task_result_timeout_seconds(default: float = 86400.0) -> float:
+    """默认超时 24 小时，支持通过 MINERU_TASK_RESULT_TIMEOUT_SECONDS 环境变量覆盖。"""
     return get_float_env(
         "MINERU_TASK_RESULT_TIMEOUT_SECONDS",
         default,
