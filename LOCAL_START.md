@@ -1,40 +1,5 @@
 # MinerU 本地启动说明
 
-## Docker Compose 启动（推荐，支持 macOS / Linux）
-
-### 基础镜像构建
-
-```bash
-docker compose build
-```
-
-### macOS / 无 GPU Linux
-
-```bash
-# 仅启动 Gradio（7860）
-docker compose --profile gradio up -d
-
-# 仅启动 API（8000）
-docker compose --profile api up -d
-
-# 仅启动 OpenAI Server（30000）
-docker compose --profile openai-server up -d
-
-# 停止
-docker compose --profile gradio down
-```
-
-### Linux + NVIDIA GPU
-
-```bash
-# 合并 GPU 覆盖配置启动
-docker compose -f docker-compose.yaml -f docker-compose.gpu.yml --profile gradio up -d
-```
-
-> **注意**：vllm 基础镜像约 1.5GB，首次构建需较长时间，建议在 GPU 服务器上执行。
-
----
-
 ## 本地脚本启动（非 Docker）
 
 本文档用于快速在本地环境启动 MinerU（不使用容器），并使用一键脚本管理服务。
@@ -42,7 +7,7 @@ docker compose -f docker-compose.yaml -f docker-compose.gpu.yml --profile gradio
 ## 1. 前置条件
 
 - 已在本机安装依赖（建议在 conda 环境）
-- 当前目录位于仓库根目录：`/mnt/services/docker-compose/one-mineru`
+- 当前目录位于仓库根目录
 
 建议安装方式：
 
@@ -131,24 +96,6 @@ bash scripts/start_mineru_local.sh gradio
 
 说明：实际端口以启动日志中的 `[start] ... on :<port>` 为准。
 
-## 7. 说明
+## 6. 说明
 
 脚本内部使用 `python -m mineru.cli.*` 启动，因此即使 `mineru-gradio` 命令未加入 PATH，也可以正常运行。
-
-如果你需要构建包含当前本地代码改动的 Docker 镜像（而不是安装已发布版本），请使用仓库根目录作为构建上下文：
-
-```bash
-# 构建镜像（使用 docker-compose）
-docker compose build --no-cache
-
-# 或手动 Docker 构建
-docker build -f docker/china/Dockerfile -t narrativeos/mineru:latest .
-docker build -f docker/global/Dockerfile -t narrativeos/mineru:latest .
-```
-
-Push 镜像：
-
-```bash
-docker push narrativeos/mineru:latest
-```
-```
