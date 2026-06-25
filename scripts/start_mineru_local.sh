@@ -7,10 +7,11 @@ to_lower() {
 }
 
 # Usage:
-#   bash scripts/start_mineru_local.sh [gradio|api|openai|all|--help]
+#   bash scripts/start_mineru_local.sh [gradio|api|openai|queue|all|--help]
 # Examples:
 #   bash scripts/start_mineru_local.sh gradio
 #   bash scripts/start_mineru_local.sh api
+#   bash scripts/start_mineru_local.sh queue
 #   bash scripts/start_mineru_local.sh all
 
 MODE="${1:-gradio}"
@@ -46,7 +47,56 @@ ENABLE_API_CACHE="${MINERU_ENABLE_API_CACHE:-true}"
 GRADIO_PORT="${MINERU_GRADIO_PORT:-8400}"
 API_PORT="${MINERU_API_PORT:-8401}"
 OPENAI_PORT="${MINERU_OPENAI_PORT:-8402}"
+QUEUE_PORT="${MINERU_QUEUE_PORT:-8403}"
+REDIS_PORT="${MINERU_REDIS_PORT:-6379}"
 PORT_SCAN_SPAN="${MINERU_PORT_SCAN_SPAN:-98}"
+
+# Redis management
+REDIS_PID_FILE="${ROOT_DIR}/.redis.pid"
+
+start_redis() {
+  # Check if Redis is already running
+  if ! command -v redis-server &>/dev/null; then
+    echo "[warn] redis-server not found in PATH" >&2
+    echo "       Install: brew install redis (macOS) or apt-get install redis-server (Linux)" >&2
+    return 1
+  fi
+
+  # Check if there's already a Redis process on the port
+  if python -c "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); sock.settimeout(1); sock.connect(('127.0.0.1', ${REDIS_PORT})); sock.close()" 2>/dev/null; then
+    echo "[info] Redis already running on :${REDIS_PORT}"
+    return 0
+  fi
+
+  echo "[start] starting Redis on :${REDIS_PORT}"
+  redis-server \
+    --port "${REDIS_PORT}" \
+    --bind 127.0.0.1 \
+    --protected-mode no \
+    --daemonize yes \
+    --pidfile "${REDIS_PID_FILE}" \
+    --dir "${ROOT_DIR}/services/redis/data" \
+    --logfile "${ROOT_DIR}/.redis.log" 2>/dev/null || {
+      echo "[warn] Failed to start Redis. Is redis-server installed?" >&2
+      echo "       Install: brew install redis (macOS) or apt-get install redis-server (Linux)" >&2
+      return 1
+    }
+  echo "[ok] Redis started on :${REDIS_PORT}"
+}
+
+stop_redis() {
+  if [ -f "${REDIS_PID_FILE}" ]; then
+    redis_pid=$(cat "${REDIS_PID_FILE}" 2>/dev/null || true)
+    if [ -n "${redis_pid}" ] && kill -0 "${redis_pid}" 2>/dev/null; then
+      echo "[info] stopping Redis (pid ${redis_pid})..."
+      kill "${redis_pid}" 2>/dev/null || true
+      sleep 1
+      kill -9 "${redis_pid}" 2>/dev/null || true
+    fi
+    rm -f "${REDIS_PID_FILE}"
+    echo "[ok] Redis stopped"
+  fi
+}
 
 find_free_port() {
   local start_port="$1"
@@ -147,8 +197,53 @@ start_openai() {
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
 }
 
+start_queue_docker() {
+  echo "[start] starting queue + redis via Docker Compose..."
+  
+  # Check if Docker is available
+  if ! command -v docker &>/dev/null; then
+    echo "[error] Docker not found. Please install Docker." >&2
+    return 1
+  fi
+  
+  # Build and start queue + redis
+  docker compose -f "${ROOT_DIR}/docker/compose.queue.yml" up -d --build || {
+    echo "[error] Failed to start queue service via Docker Compose" >&2
+    return 1
+  }
+  
+  # Wait for queue service to be ready
+  echo "[info] waiting for queue service to be ready..."
+  local retries=30
+  while [ $retries -gt 0 ]; do
+    if curl -s http://127.0.0.1:8403/health >/dev/null 2>&1; then
+      echo "[ok] queue service is ready on :8403"
+      export MINERU_QUEUE_SERVICE_URL="http://127.0.0.1:8403"
+      return 0
+    fi
+    sleep 1
+    retries=$((retries - 1))
+  done
+  
+  echo "[warn] Queue service did not become ready in time" >&2
+  return 1
+}
+
+stop_queue_docker() {
+  echo "[info] stopping queue + redis Docker containers..."
+  docker compose -f "${ROOT_DIR}/docker/compose.queue.yml" down || true
+  echo "[ok] queue service stopped"
+}
+
 print_usage() {
-  echo "Usage: bash scripts/start_mineru_local.sh [gradio|api|openai|all]"
+  echo "Usage: bash scripts/start_mineru_local.sh [gradio|api|openai|queue|all]"
+  echo ""
+  echo "Modes:"
+  echo "  gradio  - Start Gradio web UI"
+  echo "  api     - Start FastAPI server"
+  echo "  openai  - Start OpenAI-compatible VLM server"
+  echo "  queue   - Start queue service via Docker (requires Docker)"
+  echo "  all     - Start all services (gradio + api + openai + queue+redis via Docker)"
 }
 
 if [[ "$MODE" == "--help" || "$MODE" == "-h" ]]; then
@@ -197,6 +292,14 @@ case "$MODE" in
 
     pids=()
 
+    # Start queue + redis via Docker Compose
+    queue_docker_started=false
+    if start_queue_docker; then
+      queue_docker_started=true
+    else
+      echo "[warn] Queue service (Docker) not available - Gradio will not show queue toggle" >&2
+    fi
+
     cleanup() {
       echo
       echo "[info] stopping all services..."
@@ -206,6 +309,9 @@ case "$MODE" in
         fi
       done
       wait || true
+      if [ "$queue_docker_started" = true ]; then
+        stop_queue_docker
+      fi
       echo "[ok] all services stopped"
     }
 
@@ -227,6 +333,9 @@ case "$MODE" in
     echo "[info] press Ctrl+C to stop all"
 
     wait
+    ;;
+  queue)
+    start_queue_docker
     ;;
   *)
     echo "Unknown mode: $MODE"

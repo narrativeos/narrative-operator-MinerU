@@ -1,0 +1,45 @@
+# Docker Compose for MinerU Queue Service
+# Usage: docker compose -f docker/compose.queue.yml up -d
+
+services:
+  redis:
+    image: redis:7.2.4
+    container_name: mineru-redis
+    restart: always
+    ports:
+      - "8489:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    environment:
+      TZ: Asia/Shanghai
+
+  queue:
+    build:
+      context: ../services/queue
+      dockerfile: Dockerfile
+    container_name: mineru-queue
+    restart: always
+    depends_on:
+      - redis
+    ports:
+      - "8403:8403"
+    volumes:
+      - ../output:/app/output
+      - queue-tmp:/tmp/mineru-queue
+    environment:
+      TZ: Asia/Shanghai
+      MINERU_REDIS_HOST: redis
+      MINERU_REDIS_PORT: 6379
+      MINERU_REDIS_DB: 0
+      MINERU_QUEUE_PORT: 8403
+      MINERU_QUEUE_HOST: 0.0.0.0
+      MINERU_QUEUE_MAX_SIZE: 20
+      MINERU_QUEUE_RESULT_TTL: 86400
+      MINERU_QUEUE_OUTPUT_ROOT: /app/output
+      MINERU_QUEUE_TMP_DIR: /tmp/mineru-queue
+      MINERU_QUEUE_POLL_INTERVAL: 1.0
+
+volumes:
+  redis-data:
+  queue-tmp:

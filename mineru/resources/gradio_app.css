@@ -453,3 +453,183 @@ body.mineru-hide-hybrid-effort .gradio-container .contain .mineru-hybrid-effort-
         grid-template-columns: 1fr;
     }
 }
+
+/* ==================== Queue Service UI ==================== */
+
+.mineru-queue-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.mineru-queue-toggle-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--body-text-color);
+    white-space: nowrap;
+}
+
+.mineru-queue-panel {
+    border: 1px solid var(--mineru-panel-border);
+    border-radius: 8px;
+    background: var(--mineru-panel);
+    padding: 12px;
+    max-height: 360px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.mineru-queue-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.mineru-queue-panel-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--body-text-color);
+}
+
+.mineru-queue-refresh-btn {
+    font-size: 11px !important;
+    padding: 2px 10px !important;
+    border-radius: 6px !important;
+}
+
+.mineru-queue-table {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--mineru-panel-border);
+    border-radius: 6px;
+}
+
+.mineru-queue-table table {
+    font-size: 12px;
+    width: 100%;
+}
+
+.mineru-queue-table th {
+    position: sticky;
+    top: 0;
+    background: var(--mineru-status-panel-bg);
+    z-index: 1;
+    font-weight: 600;
+    font-size: 11px;
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--mineru-panel-border);
+}
+
+.mineru-queue-table td {
+    padding: 5px 8px;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--mineru-panel-border);
+}
+
+.mineru-queue-table tr:last-child td {
+    border-bottom: none;
+}
+
+.mineru-queue-table tr:hover {
+    background: rgba(249, 115, 22, 0.04);
+}
+
+/* Status badges */
+.mineru-queue-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.mineru-queue-status.waiting {
+    background: rgba(107, 114, 128, 0.15);
+    color: #6b7280;
+}
+
+.mineru-queue-status.parsing {
+    background: rgba(249, 115, 22, 0.12);
+    color: var(--mineru-accent);
+    animation: mineru-pulse 1.5s ease-in-out infinite;
+}
+
+.mineru-queue-status.done {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+}
+
+.mineru-queue-status.failed {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+}
+
+.mineru-queue-status.cancelled {
+    background: rgba(107, 114, 128, 0.1);
+    color: #9ca3af;
+    text-decoration: line-through;
+}
+
+@keyframes mineru-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Action buttons in queue table */
+.mineru-queue-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--mineru-panel-border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--body-text-color);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.mineru-queue-action:hover {
+    background: rgba(249, 115, 22, 0.08);
+    border-color: var(--mineru-accent);
+}
+
+.mineru-queue-action:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.mineru-queue-empty {
+    text-align: center;
+    padding: 24px 12px;
+    color: var(--body-text-color-subdued);
+    font-size: 12px;
+}
+
+.mineru-queue-stats {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.mineru-queue-stat {
+    font-size: 11px;
+    color: var(--body-text-color-subdued);
+}
+
+.mineru-queue-stat strong {
+    color: var(--body-text-color);
+}
+
+/* Hidden queue panel */
+.mineru-queue-panel.hidden {
+    display: none !important;
+}
