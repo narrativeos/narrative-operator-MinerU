@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# macOS-compatible case-insensitive comparison (bash 3.2 compatible)
+to_lower() {
+  echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 # Usage:
 #   bash scripts/start_mineru_local.sh [gradio|api|openai|all|--help]
 # Examples:
@@ -12,6 +17,16 @@ MODE="${1:-gradio}"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
+
+# Auto-activate uv virtual environment if it exists
+if [[ -d ".venv" ]]; then
+  echo "[info] activating uv environment: .venv"
+  source .venv/bin/activate
+elif command -v uv &>/dev/null && uv venv --help &>/dev/null; then
+  echo "[info] creating uv environment..."
+  uv venv
+  source .venv/bin/activate
+fi
 
 # Optional: use domestic model source by default.
 export MINERU_MODEL_SOURCE="modelscope"
@@ -27,10 +42,11 @@ ENABLE_GRADIO_UI_CACHE="${MINERU_ENABLE_GRADIO_UI_CACHE:-true}"
 ENABLE_API_CACHE="${MINERU_ENABLE_API_CACHE:-true}"
 
 # Preferred ports. If occupied, script will pick the next available port in range.
-GRADIO_PORT="${MINERU_GRADIO_PORT:-7860}"
-API_PORT="${MINERU_API_PORT:-8000}"
-OPENAI_PORT="${MINERU_OPENAI_PORT:-30000}"
-PORT_SCAN_SPAN="${MINERU_PORT_SCAN_SPAN:-20}"
+# Ports are in the 8400-8499 range
+GRADIO_PORT="${MINERU_GRADIO_PORT:-8400}"
+API_PORT="${MINERU_API_PORT:-8401}"
+OPENAI_PORT="${MINERU_OPENAI_PORT:-8402}"
+PORT_SCAN_SPAN="${MINERU_PORT_SCAN_SPAN:-98}"
 
 find_free_port() {
   local start_port="$1"
@@ -85,7 +101,7 @@ start_gradio() {
   local selected_gradio_port
   selected_gradio_port="$(pick_port "$GRADIO_PORT" "gradio")"
   echo "[start] gradio on :${selected_gradio_port}"
-  if [[ "${ENABLE_GRADIO_UI_CACHE,,}" == "true" ]]; then
+  if [[ "$(to_lower "${ENABLE_GRADIO_UI_CACHE}")" == "true" ]]; then
     gradio_cache_flag="--enable-ui-cache"
   else
     gradio_cache_flag="--disable-ui-cache"
@@ -105,7 +121,7 @@ start_api() {
   local selected_api_port
   selected_api_port="$(pick_port "$API_PORT" "api")"
   echo "[start] api on :${selected_api_port}"
-  if [[ "${ENABLE_API_CACHE,,}" == "true" ]]; then
+  if [[ "$(to_lower "${ENABLE_API_CACHE}")" == "true" ]]; then
     api_cache_flag="--enable-api-cache"
   else
     api_cache_flag="--disable-api-cache"
@@ -168,12 +184,12 @@ case "$MODE" in
     selected_api_port="$(pick_port "$API_PORT" "api")"
     selected_gradio_port="$(pick_port "$GRADIO_PORT" "gradio")"
 
-    if [[ "${ENABLE_API_CACHE,,}" == "true" ]]; then
+    if [[ "$(to_lower "${ENABLE_API_CACHE}")" == "true" ]]; then
       api_cache_flag="--enable-api-cache"
     else
       api_cache_flag="--disable-api-cache"
     fi
-    if [[ "${ENABLE_GRADIO_UI_CACHE,,}" == "true" ]]; then
+    if [[ "$(to_lower "${ENABLE_GRADIO_UI_CACHE}")" == "true" ]]; then
       gradio_cache_flag="--enable-ui-cache"
     else
       gradio_cache_flag="--disable-ui-cache"
