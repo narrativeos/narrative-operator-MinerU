@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
 import urllib.request
 import urllib.parse
 import hashlib
@@ -90,76 +90,3 @@ async def parse_pdf(encodeUrl: str = None, md5: str = None, parse_method: str = 
     return file_info
 
 
-@app.post("/parse_pdf_upload",
-          summary="Upload PDF file for parsing",
-          description="Directly upload a PDF file for parsing via multipart/form-data. "
-                      "Suitable for desktop clients or other scenarios where a URL is not available. "
-                      "直接上传 PDF 文件进行解析，支持 multipart/form-data 上传，适用于桌面客户端等无法提供 URL 的场景。",
-          responses={
-              200: {
-                  "description": "Task accepted",
-                  "content": {
-                      "application/json": {
-                          "examples": {
-                              "accepted": {
-                                  "value": {"state": "waiting", "md5": "abc123def456", "queue": 2}
-                              },
-                              "cache_hit": {
-                                  "value": {"state": "parsing", "md5": "abc123def456", "queue": 2}
-                              },
-                              "failed": {
-                                  "value": {"state": "failed", "error": "Failed to read uploaded file"}
-                              }
-                          }
-                      }
-                  }
-              }
-          })
-async def parse_pdf_upload(
-    file: UploadFile = File(..., description="PDF file to be parsed / 需要解析的 PDF 文件"),
-    parse_method: str = 'auto'
-):
-    """
-    Directly upload a PDF file for parsing.
-
-    Supports multipart/form-data upload, suitable for desktop clients etc.
-
-    **Form Fields:**
-    - `file` (required): PDF binary data
-    - `parse_method` (optional): Parsing method, one of: auto, ocr, txt (default: auto)
-
-    **Response:** Same format as `/parse_pdf`: `{"state": "waiting", "md5": "...", "queue": N}`
-    """
-    try:
-        pdf_bytes = await file.read()
-    except Exception:
-        return {"state": "failed", "error": "Failed to read uploaded file"}
-
-    if not pdf_bytes:
-        return {"state": "failed", "error": "Empty file"}
-
-    md5_value = calc_md5(pdf_bytes)
-
-    # 先查询 Redis 是否已有结果
-    file_info = redis_util.get_file_info(md5_value)
-    if file_info:
-        file_info['queue'] = message_queue.qsize()
-        return file_info
-
-    # 保存临时文件
-    file_path = '/gateway/tmp/' + md5_value + '.pdf'
-    if not os.path.isfile(file_path):
-        with open(file_path, 'wb') as tmp_file:
-            tmp_file.write(pdf_bytes)
-
-    # 提交解析任务
-    try:
-        commit_parse_task(md5_value, parse_method)
-    except Exception:
-        redis_util.set_parse_deny(md5_value)
-        return redis_util.get_file_info(md5_value)
-
-    redis_util.set_parse_init(md5_value)
-    file_info = redis_util.get_file_info(md5_value)
-    file_info['queue'] = message_queue.qsize()
-    return file_info
