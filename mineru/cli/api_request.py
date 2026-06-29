@@ -99,12 +99,12 @@ async def parse_request_form(
         ),
     ],
     lang_list: Annotated[
-        list[str],
+        str,
         Form(
             description=format_public_ocr_lang_description(),
             json_schema_extra=PUBLIC_OCR_LANGUAGE_SCHEMA_EXTRA,
         ),
-    ] = ["ch"],
+    ] = "ch",
     backend: Annotated[
         str,
         Form(
@@ -231,9 +231,11 @@ async def parse_request_form(
         return_images = True
 
     effective_return_original_file = return_original_file and response_format_zip
+    # Parse lang_list from comma-separated string
+    lang_list_parsed = [lang.strip() for lang in lang_list.split(",") if lang.strip()]
     return ParseRequestOptions(
         files=files,
-        lang_list=validate_parse_lang_list(lang_list),
+        lang_list=validate_parse_lang_list(lang_list_parsed),
         backend=backend,
         effort=effort,
         parse_method=validate_parse_method(parse_method),

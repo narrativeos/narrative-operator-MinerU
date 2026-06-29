@@ -1366,28 +1366,9 @@ async def get_async_task_result(
     responses={
         200: {
             "description": "Parsing successful",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "task_id": "xxx",
-                        "status": "completed",
-                        "backend": "pipeline",
-                        "file_names": ["demo1"],
-                        "results": {...}
-                    }
-                },
-                "application/zip": {
-                    "description": "ZIP file with parsing results (if response_format_zip=true)"
-                }
-            },
         },
         400: {
             "description": "Invalid request",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Failed to read uploaded file"}
-                }
-            },
         },
     },
 )
@@ -1395,11 +1376,11 @@ async def parse_pdf_upload(
     http_request: Request,
     background_tasks: BackgroundTasks,
     file: Annotated[
-        UploadFile,
+        UploadFile | None,
         File(
             description="PDF file to parse",
         ),
-    ],
+    ] = None,
     parse_method: Annotated[
         str,
         Form(
@@ -1420,9 +1401,9 @@ async def parse_pdf_upload(
         ),
     ] = "pipeline",
     lang_list: Annotated[
-        list[str],
-        Form(description="OCR language list, comma-separated (default: ch)"),
-    ] = ["ch"],
+        str,
+        Form(description="OCR language (default: ch)"),
+    ] = "ch",
     formula_enable: Annotated[bool, Form(description="Enable formula parsing.")] = True,
     table_enable: Annotated[bool, Form(description="Enable table parsing.")] = True,
     response_format_zip: Annotated[
@@ -1442,6 +1423,12 @@ async def parse_pdf_upload(
         validate_parse_lang_list,
     )
     
+    if file is None:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "No file uploaded"},
+        )
+
     try:
         pdf_bytes = await file.read()
     except Exception:
@@ -1476,12 +1463,13 @@ async def parse_pdf_upload(
         # Validate parameters
         parse_method = validate_parse_method(parse_method)
         backend = validate_parse_backend(backend)
-        lang_list = validate_parse_lang_list(lang_list)
+        lang_list_parsed = [lang.strip() for lang in lang_list.split(",") if lang.strip()]
+        lang_list_parsed = validate_parse_lang_list(lang_list_parsed)
 
         # Build ParseRequestOptions
         request_options = ParseRequestOptions(
             files=[mock_upload],
-            lang_list=lang_list,
+            lang_list=lang_list_parsed,
             backend=backend,
             effort=DEFAULT_HYBRID_EFFORT,
             parse_method=parse_method,
