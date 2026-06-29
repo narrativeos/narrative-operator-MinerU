@@ -21,6 +21,8 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     FastAPI,
+    File,
+    Form,
     HTTPException,
     Request,
     UploadFile,
@@ -1350,6 +1352,165 @@ async def get_async_task_result(
         return_original_file=task.return_original_file,
         zip_filename=f"{task.task_id}.zip",
     )
+
+
+@app.post(
+    path="/parse_pdf_upload",
+    status_code=200,
+    summary="Upload a PDF file and parse it synchronously",
+    description=(
+        "Directly upload a PDF file via multipart/form-data for parsing. "
+        "This is a simplified endpoint for desktop clients that cannot provide a URL. "
+        "For full control over parsing options, use POST /file_parse instead."
+    ),
+    responses={
+        200: {
+            "description": "Parsing successful",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "task_id": "xxx",
+                        "status": "completed",
+                        "backend": "pipeline",
+                        "file_names": ["demo1"],
+                        "results": {...}
+                    }
+                },
+                "application/zip": {
+                    "description": "ZIP file with parsing results (if response_format_zip=true)"
+                }
+            },
+        },
+        400: {
+            "description": "Invalid request",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to read uploaded file"}
+                }
+            },
+        },
+    },
+)
+async def parse_pdf_upload(
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+    file: Annotated[
+        UploadFile,
+        File(
+            description="PDF file to parse",
+        ),
+    ],
+    parse_method: Annotated[
+        str,
+        Form(
+            description="""The method for parsing PDF:
+- auto: Automatically determine the method based on the file type
+- txt: Use text extraction method
+- ocr: Use OCR method for image-based PDFs
+""",
+        ),
+    ] = "auto",
+    backend: Annotated[
+        str,
+        Form(
+            description="""The backend for parsing:
+- pipeline: More general, supports multiple languages, hallucination-free.
+- vlm-engine: High accuracy via local computing power.
+- hybrid-engine: Hybrid parsing via local computing power.""",
+        ),
+    ] = "pipeline",
+    lang_list: Annotated[
+        list[str],
+        Form(description="OCR language list, comma-separated (default: ch)"),
+    ] = ["ch"],
+    formula_enable: Annotated[bool, Form(description="Enable formula parsing.")] = True,
+    table_enable: Annotated[bool, Form(description="Enable table parsing.")] = True,
+    response_format_zip: Annotated[
+        bool,
+        Form(description="Return results as a ZIP file instead of JSON"),
+    ] = False,
+):
+    """
+    Upload a single PDF file for parsing.
+    
+    This is a convenience endpoint that wraps the full /file_parse endpoint
+    with sensible defaults for simple use cases.
+    """
+    from mineru.cli.api_request import (
+        validate_parse_method,
+        validate_parse_backend,
+        validate_parse_lang_list,
+    )
+    
+    try:
+        pdf_bytes = await file.read()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Failed to read uploaded file"},
+        )
+
+    if not pdf_bytes:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Empty file"},
+        )
+
+    # Create a temporary file for the upload
+    import tempfile
+    original_name = file.filename or "upload.pdf"
+    suffix = Path(original_name).suffix or ".pdf"
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="mineru_upload_")
+    os.close(tmp_fd)
+    with open(tmp_path, "wb") as f:
+        f.write(pdf_bytes)
+
+    # Create a mock UploadFile from the bytes
+    from io import BytesIO
+    mock_upload = UploadFile(
+        file=BytesIO(pdf_bytes),
+        filename=original_name,
+    )
+
+    try:
+        # Validate parameters
+        parse_method = validate_parse_method(parse_method)
+        backend = validate_parse_backend(backend)
+        lang_list = validate_parse_lang_list(lang_list)
+
+        # Build ParseRequestOptions
+        request_options = ParseRequestOptions(
+            files=[mock_upload],
+            lang_list=lang_list,
+            backend=backend,
+            effort=DEFAULT_HYBRID_EFFORT,
+            parse_method=parse_method,
+            formula_enable=formula_enable,
+            table_enable=table_enable,
+            image_analysis=True,
+            server_url=None,
+            return_md=True,
+            return_middle_json=False,
+            return_model_output=False,
+            return_content_list=False,
+            return_images=False,
+            response_format_zip=response_format_zip,
+            return_original_file=False,
+            client_side_output_generation=False,
+            start_page_id=0,
+            end_page_id=99999,
+        )
+
+        # Reuse the existing parse_pdf logic
+        return await parse_pdf(
+            http_request=http_request,
+            background_tasks=background_tasks,
+            request_options=request_options,
+        )
+    finally:
+        # Clean up temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.get(path="/health")

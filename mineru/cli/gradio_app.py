@@ -1480,7 +1480,9 @@ HEADER_I18N_PLACEHOLDERS = {
     "{{HEADER_PAPER_MINERU25PRO_REPORT}}": "header_paper_mineru25pro_report",
     "{{HEADER_HOMEPAGE_LINK}}": "header_homepage_link",
     "{{HEADER_DOWNLOAD_LINK}}": "header_download_link",
+    "{{HEADER_API_DOCS_LINK}}": "header_api_docs_link",
 }
+HEADER_API_DOCS_URL_PLACEHOLDER = "{{HEADER_API_DOCS_URL}}"
 HEADER_GRADIO_VERSION_CLASS_PLACEHOLDER = "{{HEADER_GRADIO_VERSION_CLASS}}"
 
 
@@ -1499,6 +1501,12 @@ def render_header_html(i18n):
     rendered_header = rendered_header.replace(
         HEADER_GRADIO_VERSION_CLASS_PLACEHOLDER,
         " mineru-gradio6-header" if IS_GRADIO_6 else "",
+    )
+    # Replace API docs URL with the FastAPI Swagger docs URL
+    api_docs_url = os.environ.get("MINERU_API_DOCS_URL", "http://localhost:8000/docs")
+    rendered_header = rendered_header.replace(
+        HEADER_API_DOCS_URL_PLACEHOLDER,
+        html_lib.escape(api_docs_url, quote=True),
     )
     return rendered_header
 
@@ -1745,6 +1753,7 @@ def main(ctx,
             "header_paper_mineru25pro_report": "MinerU 2.5 Pro · arXiv: 2604.04771",
             "header_homepage_link": "Homepage",
             "header_download_link": "Download",
+            "header_api_docs_link": "API Docs",
             "max_pages": "Max convert pages",
             "backend": "Backend",
             "backend_label_hybrid": "Hybrid (Recommended)",
@@ -1836,6 +1845,7 @@ def main(ctx,
             "header_paper_mineru25pro_report": "MinerU 2.5 Pro · arXiv: 2604.04771",
             "header_homepage_link": "主页",
             "header_download_link": "下载",
+            "header_api_docs_link": "API 文档",
             "max_pages": "最大转换页数",
             "backend": "解析后端",
             "backend_label_hybrid": "Hybrid 推荐",
