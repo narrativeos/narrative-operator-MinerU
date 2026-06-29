@@ -4,7 +4,7 @@
 services:
   redis:
     image: redis:7.2-alpine
-    container_name: mineru-redis
+    container_name: narrative-operator-mineru-redis
     restart: always
     # No external ports - internal network only
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --requirepass mineru_queue_redis
@@ -19,7 +19,7 @@ services:
     build:
       context: ../services/queue
       dockerfile: Dockerfile
-    container_name: mineru-queue
+    container_name: narrative-operator-mineru-queue
     restart: always
     depends_on:
       - redis

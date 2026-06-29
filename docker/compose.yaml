@@ -1,7 +1,7 @@
 services:
-  mineru-openai-server:
-    image: mineru:latest
-    container_name: mineru-openai-server
+   mineru-openai-server:
+     image: mineru:latest
+     container_name: narrative-operator-mineru-openai
     restart: always
     profiles: ["openai-server"]
     ports:
@@ -27,9 +27,9 @@ services:
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
 
-  mineru-api:
-    image: mineru:latest
-    container_name: mineru-api
+   mineru-api:
+     image: mineru:latest
+     container_name: narrative-operator-mineru-api
     restart: always
     profiles: ["api"]
     ports:
@@ -57,9 +57,9 @@ services:
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
 
-  mineru-router:
-    image: mineru:latest
-    container_name: mineru-router
+   mineru-router:
+     image: mineru:latest
+     container_name: narrative-operator-mineru-router
     restart: always
     profiles: ["router"]
     ports:
@@ -92,9 +92,9 @@ services:
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
 
-  mineru-gradio:
-    image: mineru:latest
-    container_name: mineru-gradio
+   mineru-gradio:
+     image: mineru:latest
+     container_name: narrative-operator-mineru-gradio
     restart: always
     profiles: ["gradio"]
     ports:
