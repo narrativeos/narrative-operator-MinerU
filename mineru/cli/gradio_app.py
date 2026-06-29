@@ -2142,32 +2142,105 @@ def main(ctx,
                 refresh_queue_panel_sync(),
             )
 
-    async def queue_action_handler(action: str, task_id: str):
-        """Handle queue actions (cancel, delete, clear_all) triggered from JS."""
-        if not is_queue_enabled():
-            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n), 
+    async def queue_action_handler(action: str, task_id: str, request: gr.Request = None):
+        """Handle queue actions (cancel, delete, clear_all, download, load) triggered from JS."""
+        request_locale = resolve_request_locale(request)
+        default_outputs = (refresh_queue_panel_sync(), render_status_steps_html("", i18n, locale=request_locale),
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+        if not is_queue_enabled():
+            return default_outputs
         try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
+            async with httpx.AsyncClient(timeout=120.0) as c:
                 if action == "clear_all":
                     await queue_clear_all(c)
                 elif action == "cancel":
                     await queue_cancel_task(c, task_id)
                 elif action == "delete":
                     await queue_delete_task(c, task_id)
-                elif action == "load":
-                    # For load, we need to call queue_load_result_handler
-                    # This is handled separately via the JS -> textbox mechanism
-                    pass
                 elif action == "download":
-                    # Download is handled by direct link
-                    pass
-        except Exception:
-            pass
-        return (refresh_queue_panel_sync(), render_status_steps_html("", i18n),
+                    # Download the result zip and return it as a downloadable file
+                    task = await queue_get_task(c, task_id)
+                    if not task or task.get("status") != "done":
+                        status_html = render_status_steps_html(
+                            f"Failed: task {task_id} not ready", i18n, locale=request_locale)
+                        return (refresh_queue_panel_sync(), status_html,
+                                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+                    zip_data = await queue_download_result(c, task_id)
+                    if not zip_data:
+                        status_html = render_status_steps_html(
+                            f"Failed: cannot download result for {task_id}", i18n, locale=request_locale)
+                        return (refresh_queue_panel_sync(), status_html,
+                                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+                    # Save zip to output/gradio directory (in allowed_paths) so Gradio can serve it
+                    filename = task.get("filename", "").rsplit(".", 1)[0]
+                    output_dir = Path("./output/gradio")
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    zip_filename = f"{filename}_queue_{task_id}.zip"
+                    zip_path = output_dir / zip_filename
+                    zip_path.write_bytes(zip_data)
+                    status_html = render_status_steps_html(
+                        f"Downloaded: {zip_filename}", i18n, locale=request_locale)
+                    return (refresh_queue_panel_sync(), status_html,
+                            str(zip_path), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+                elif action == "load":
+                    # Load the result into the main UI (same as queue_load_result_handler)
+                    task = await queue_get_task(c, task_id)
+                    if not task or task.get("status") != "done":
+                        status_html = render_status_steps_html(
+                            f"Failed: task {task_id} not ready", i18n, locale=request_locale)
+                        return (refresh_queue_panel_sync(), status_html,
+                                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+                    zip_data = await queue_download_result(c, task_id)
+                    if not zip_data:
+                        status_html = render_status_steps_html(
+                            f"Failed: cannot download result for {task_id}", i18n, locale=request_locale)
+                        return (refresh_queue_panel_sync(), status_html,
+                                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+                    # Extract to temp dir
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                        tmp.write(zip_data)
+                        tmp_path = tmp.name
+                    extract_root = Path(tempfile.mkdtemp())
+                    try:
+                        _api_client.safe_extract_zip(tmp_path, extract_root)
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
+
+                    file_name = task.get("filename", "").rsplit(".", 1)[0]
+                    local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
+                    md_path = Path(local_md_dir) / f"{file_name}.md"
+                    if md_path.is_file():
+                        txt_content = md_path.read_text(encoding="utf-8")
+                        md_content = replace_image_with_gradio_file_urls(txt_content, local_md_dir)
+                    else:
+                        txt_content = ""
+                        md_content = ""
+                    content_list_json = read_gradio_content_list_json(local_md_dir, file_name)
+                    preview_pdf_path = resolve_preview_pdf_path(local_md_dir, file_name)
+                    status_html = render_status_steps_html(
+                        f"{STATUS_COMPLETED} (loaded from queue: {task_id})",
+                        i18n,
+                        locale=request_locale,
+                    )
+                    return (
+                        refresh_queue_panel_sync(),
+                        status_html,
+                        None,  # output_file
+                        prepare_markdown_for_gradio_preview(md_content, latex_delimiters),
+                        txt_content,
+                        content_list_json,
+                        preview_pdf_path,
+                        "",
+                    )
+        except Exception as e:
+            status_html = render_status_steps_html(f"Failed: {e}", i18n, locale=request_locale)
+            return (refresh_queue_panel_sync(), status_html,
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+        return (refresh_queue_panel_sync(), render_status_steps_html("", i18n, locale=request_locale),
                 gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
 
-    def _handle_queue_action_from_js(action_msg, i18n_local):
+    def _handle_queue_action_from_js(action_msg, i18n_local, request: gr.Request = None):
         """Sync wrapper to handle queue action messages from JS.
         Expects format: "action:task_id" e.g. "clear_all:" or "cancel:abc123"
         """
@@ -2176,7 +2249,7 @@ def main(ctx,
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
         action, task_id = action_msg.split(":", 1)
         try:
-            result = asyncio.run(queue_action_handler(action, task_id))
+            result = asyncio.run(queue_action_handler(action, task_id, request))
             return result
         except Exception:
             return (refresh_queue_panel_sync(), render_status_steps_html("", i18n_local),
@@ -2555,7 +2628,7 @@ def main(ctx,
             )
             # Handle queue action button clicks from JS (cancel, delete, clear_all, download, load)
             queue_action_input.change(
-                fn=lambda action_msg: _handle_queue_action_from_js(action_msg, i18n),
+                fn=lambda action_msg, request: _handle_queue_action_from_js(action_msg, i18n, request),
                 inputs=[queue_action_input],
                 outputs=[queue_panel, status_panel, output_file, md, md_text, content_list_json, doc_show, queue_action_input],
                 **_private_api_kwargs
