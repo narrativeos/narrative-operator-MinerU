@@ -504,6 +504,26 @@
             return;
         }
         queueMineruOptionVisibilityRefresh();
+        // Handle queue action button clicks (clear_all, cancel, delete, download, load)
+        const queueActionBtn = target.closest(".mineru-queue-action");
+        if (queueActionBtn) {
+            const action = queueActionBtn.getAttribute("data-action");
+            const taskId = queueActionBtn.getAttribute("data-task-id") || "";
+            if (action) {
+                // Send action to the hidden textbox component
+                const actionInput = document.getElementById("mineru-queue-action-input");
+                if (actionInput) {
+                    // Find the textarea or input inside the component
+                    const inputEl = actionInput.querySelector("textarea, input[type='text'], input");
+                    if (inputEl) {
+                        inputEl.value = `${action}:${taskId}`;
+                        inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+                        inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+                    }
+                }
+            }
+            return;
+        }
         if (target.closest(".office-preview-ignore-forever")) {
             const notice = target.closest(".office-preview-notice");
             if (setOfficePreviewNoticeIgnored()) {

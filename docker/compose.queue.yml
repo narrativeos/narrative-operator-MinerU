@@ -3,14 +3,15 @@
 
 services:
   redis:
-    image: redis:7.2.4
+    image: redis:7.2-alpine
     container_name: mineru-redis
     restart: always
-    ports:
-      - "8489:6379"
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # No external ports - internal network only
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --requirepass mineru_queue_redis
     volumes:
       - redis-data:/data
+    networks:
+      - mineru-queue
     environment:
       TZ: Asia/Shanghai
 
@@ -27,11 +28,15 @@ services:
     volumes:
       - ../output:/app/output
       - queue-tmp:/tmp/mineru-queue
+    networks:
+      - mineru-queue
     environment:
       TZ: Asia/Shanghai
+      MINERU_API_URL: http://host.docker.internal:8401
       MINERU_REDIS_HOST: redis
       MINERU_REDIS_PORT: 6379
       MINERU_REDIS_DB: 0
+      MINERU_REDIS_PASSWORD: mineru_queue_redis
       MINERU_QUEUE_PORT: 8403
       MINERU_QUEUE_HOST: 0.0.0.0
       MINERU_QUEUE_MAX_SIZE: 20
@@ -43,3 +48,7 @@ services:
 volumes:
   redis-data:
   queue-tmp:
+
+networks:
+  mineru-queue:
+    driver: bridge

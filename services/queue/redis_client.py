@@ -215,6 +215,27 @@ class RedisQueueManager:
         except Exception:
             return None
 
+    def clear_all_tasks(self) -> int:
+        """Clear all tasks from the queue. Returns number of cleared tasks."""
+        all_task_ids = set()
+        # Collect all task IDs
+        all_task_ids.update(self.client.lrange(PENDING_LIST, 0, -1))
+        all_task_ids.update(self.client.smembers(PROCESSING_SET))
+        all_task_ids.update(self.client.smembers(DONE_SET))
+        all_task_ids.update(self.client.smembers(FAILED_SET))
+        
+        # Clear all collections
+        self.client.delete(PENDING_LIST)
+        self.client.delete(PROCESSING_SET)
+        self.client.delete(DONE_SET)
+        self.client.delete(FAILED_SET)
+        
+        # Delete all task keys
+        for task_id in all_task_ids:
+            self.client.delete(f"{TASK_KEY_PREFIX}{task_id}")
+        
+        return len(all_task_ids)
+
     def cleanup_expired(self) -> int:
         """Clean up expired tasks. Returns number of cleaned tasks."""
         cleaned = 0

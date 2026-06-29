@@ -173,6 +173,13 @@ async def submit_task(
     return JSONResponse(status_code=202, content=response)
 
 
+@app.delete("/tasks", status_code=204)
+async def clear_all_tasks():
+    """Clear all tasks from the queue."""
+    queue_manager.clear_all_tasks()
+    return None
+
+
 @app.get("/tasks")
 async def list_tasks():
     """Get all tasks in the queue."""

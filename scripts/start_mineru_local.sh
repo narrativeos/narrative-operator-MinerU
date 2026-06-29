@@ -29,6 +29,189 @@ elif command -v uv &>/dev/null && uv venv --help &>/dev/null; then
   source .venv/bin/activate
 fi
 
+# Ensure project is installed in current environment
+ensure_project_installed() {
+  # Check for core dependencies that are required for all services
+  # loguru = base dependency, gradio = required for gradio mode
+  local needs_install=false
+  if ! python -c "import loguru" 2>/dev/null; then
+    needs_install=true
+  fi
+  if ! python -c "import gradio" 2>/dev/null; then
+    needs_install=true
+  fi
+
+  if [ "$needs_install" = true ]; then
+    echo "[info] Project dependencies not found, installing..."
+    if [[ -d ".venv" ]] && command -v uv &>/dev/null; then
+      uv pip install -e ".[core]" || {
+        echo "[error] Failed to install project dependencies." >&2
+        echo "        Please install manually: uv pip install -e .[core]" >&2
+        exit 1
+      }
+    elif command -v pip &>/dev/null; then
+      pip install -e ".[core]" || {
+        echo "[error] Failed to install project dependencies." >&2
+        echo "        Please install manually: pip install -e .[core]" >&2
+        exit 1
+      }
+    else
+      python -m pip install -e ".[core]" || {
+        echo "[error] Failed to install project dependencies." >&2
+        echo "        Please install manually: python -m pip install -e .[core]" >&2
+        exit 1
+      }
+    fi
+    echo "[ok] Project installed successfully"
+  fi
+}
+
+ensure_project_installed
+
+# Auto-detect platform and install appropriate VLM inference engine
+detect_and_install_vlm_engine() {
+  local install_cmd=""
+
+  # Determine the correct install command based on environment
+  if [[ -d ".venv" ]] && command -v uv &>/dev/null; then
+    # Using uv virtual environment - use uv pip
+    install_cmd="uv pip install"
+  elif command -v pip &>/dev/null; then
+    install_cmd="pip install"
+  else
+    install_cmd="python -m pip install"
+  fi
+
+  # Get Python version for compatibility checks
+  local python_version
+  python_version=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  local python_minor
+  python_minor=$(python -c "import sys; print(sys.version_info.minor)")
+
+  # Check if running on macOS Apple Silicon (M1-M5)
+  local arch
+  arch=$(uname -m)
+
+  if [[ "$arch" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS Apple Silicon - use vllm-metal (optimized for Apple GPU via Metal)
+    # Note: lmdeploy does NOT support macOS arm64 (no wheels available)
+    # vllm-metal has threading issues with Python 3.13+, so downgrade to 3.12 if needed
+    if [[ "$python_minor" -ge 13 ]]; then
+      echo "[warn] Python ${python_version} detected, but vllm-metal has issues with Python 3.13+"
+      echo "[info] Recreating uv environment with Python 3.12..."
+      rm -rf .venv
+      uv venv --python 3.12 || {
+        echo "[error] Failed to create uv environment with Python 3.12." >&2
+        echo "        Please install Python 3.12 first: brew install python@3.12" >&2
+        exit 1
+      }
+      source .venv/bin/activate
+      python_version=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+      python_minor=$(python -c "import sys; print(sys.version_info.minor)")
+      install_cmd="uv pip install"
+      echo "[ok] uv environment recreated with Python ${python_version}"
+      # Reinstall project dependencies after environment recreation
+      echo "[info] Reinstalling project dependencies..."
+      uv pip install -e ".[core]" || {
+        echo "[error] Failed to install project dependencies." >&2
+        echo "        Please install manually: uv pip install -e .[core]" >&2
+        exit 1
+      }
+      echo "[ok] Project dependencies installed"
+    fi
+
+    if ! python -c "import vllm" 2>/dev/null; then
+      echo "[info] Detected macOS Apple Silicon (Python ${python_version}), installing vllm + vllm-metal for VLM support..."
+      
+      # Uninstall torchaudio first to avoid version conflict with vllm's torch
+      # (torchaudio from CPU index maxes at 2.11, but vllm pulls torch 2.12+)
+      if python -c "import torchaudio" 2>/dev/null; then
+        echo "[info] Removing existing torchaudio to avoid version conflict..."
+        uv pip uninstall torchaudio -y 2>/dev/null || true
+      fi
+      
+      # Try to install vllm from pypi (may have pre-built wheels for macOS arm64)
+      echo "[info] Installing vllm..."
+      $install_cmd vllm || {
+        echo "[warn] vllm pip install failed, trying to download from source..." >&2
+        local tmpdir
+        tmpdir=$(mktemp -d)
+        if curl -sL "https://github.com/vllm-project/vllm/releases/download/v0.13.0/vllm-0.13.0.tar.gz" -o "${tmpdir}/vllm.tar.gz" 2>/dev/null; then
+          tar -xzf "${tmpdir}/vllm.tar.gz" -C "${tmpdir}/" 2>/dev/null
+          if [[ -f "${tmpdir}/vllm-0.13.0/requirements/cpu.txt" ]]; then
+            uv pip install -r "${tmpdir}/vllm-0.13.0/requirements/cpu.txt" --index-strategy unsafe-best-match 2>&1 | tail -3 || true
+          fi
+          uv pip install "${tmpdir}/vllm-0.13.0/" 2>&1 | tail -5 || true
+        fi
+        rm -rf "${tmpdir}"
+      }
+      
+      # Install vllm-metal plugin for Apple GPU acceleration
+      echo "[info] Installing vllm-metal plugin..."
+      $install_cmd vllm-metal || {
+        echo "[warn] vllm-metal plugin installation failed." >&2
+        echo "       vLLM is installed but may not use Metal acceleration." >&2
+      }
+      
+      # Verify installation
+      if python -c "import vllm" 2>/dev/null; then
+        echo "[ok] vllm + vllm-metal installed successfully"
+      else
+        echo "[warn] vllm import failed after installation. VLM server may not work." >&2
+      fi
+    else
+      echo "[info] vllm already installed"
+      # Check if torchaudio is installed and causing version conflicts
+      # torchaudio from CPU source maxes at 2.11, but vllm pulls torch 2.12+
+      # Solution: uninstall torchaudio if it's incompatible (vllm doesn't need it)
+      if python -c "import torchaudio" 2>/dev/null; then
+        local torch_major_minor
+        torch_major_minor=$(python -c "import torch; v=torch.__version__.split('.'); print(v[0]+'.'+v[1])" 2>/dev/null || echo "")
+        local torchaudio_major_minor
+        torchaudio_major_minor=$(python -c "import torchaudio; v=torchaudio.__version__.split('.'); print(v[0]+'.'+v[1])" 2>/dev/null || echo "")
+        if [[ -n "$torch_major_minor" ]] && [[ -n "$torchaudio_major_minor" ]] && [[ "$torch_major_minor" != "$torchaudio_major_minor" ]]; then
+          echo "[warn] torch (${torch_major_minor}) and torchaudio (${torchaudio_major_minor}) version mismatch"
+          echo "[info] Uninstalling incompatible torchaudio (vllm doesn't need it)..."
+          uv pip uninstall torchaudio -y 2>/dev/null || true
+          echo "[ok] torchaudio removed to fix VLM compatibility"
+        fi
+      fi
+    fi
+  elif command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    # NVIDIA GPU detected - use vLLM
+    if ! python -c "import vllm" 2>/dev/null; then
+      echo "[info] Detected NVIDIA GPU (Python ${python_version}), installing vllm for VLM support..."
+      $install_cmd vllm || {
+        echo "[error] Failed to install vllm. VLM server will not work." >&2
+        echo "        Please install manually: $install_cmd vllm" >&2
+        exit 1
+      }
+      echo "[ok] vllm installed successfully"
+    else
+      echo "[info] vllm already installed"
+    fi
+  else
+    # No GPU detected - try vLLM first, fallback to LMDeploy
+    if ! python -c "import vllm" 2>/dev/null && ! python -c "import lmdeploy" 2>/dev/null; then
+      echo "[warn] No GPU detected (Python ${python_version}). Attempting to install vllm..."
+      $install_cmd vllm || {
+        echo "[warn] vllm installation failed, attempting lmdeploy..."
+        $install_cmd lmdeploy || {
+          echo "[warn] Both vllm and lmdeploy installation failed." >&2
+          echo "       VLM server may not work. Install manually:" >&2
+          echo "       - NVIDIA GPU: $install_cmd vllm" >&2
+          echo "       - macOS/Other: $install_cmd lmdeploy" >&2
+          return 0
+        }
+        echo "[ok] lmdeploy installed successfully"
+      }
+      echo "[ok] vllm installed successfully"
+    fi
+  fi
+}
+
+detect_and_install_vlm_engine
+
 # Optional: use domestic model source by default.
 export MINERU_MODEL_SOURCE="modelscope"
 # Prefer conservative hybrid batch ratio on shared GPUs unless user overrides it.

@@ -633,3 +633,115 @@ body.mineru-hide-hybrid-effort .gradio-container .contain .mineru-hybrid-effort-
 .mineru-queue-panel.hidden {
     display: none !important;
 }
+
+/* Queue convert button row */
+.mineru-queue-convert-row {
+    margin-top: 4px;
+}
+
+.mineru-queue-convert-row > div {
+    width: 100%;
+}
+
+.mineru-queue-convert-row button {
+    width: 100% !important;
+    min-width: 0 !important;
+}
+
+/* ==================== Bottom Full-Width Queue Panel ==================== */
+
+.mineru-queue-bottom-row {
+    width: 100% !important;
+    margin-top: 16px;
+    /* Remove the default gr.Row border/radius wrapper */
+    border: none !important;
+    border-radius: 0 !important;
+    background: none !important;
+    padding: 0 !important;
+}
+
+/* Remove the extra wrapper layer that gr.Row creates */
+.mineru-queue-bottom-row > .wrap,
+.mineru-queue-bottom-row > .block,
+.mineru-queue-bottom-row > .box {
+    border: none !important;
+    border-radius: 0 !important;
+    background: none !important;
+    padding: 0 !important;
+}
+
+.mineru-queue-bottom-row > .mineru-queue-panel {
+    width: 100% !important;
+    max-width: none !important;
+}
+
+.mineru-queue-bottom-row .mineru-queue-panel {
+    max-height: 400px;
+    overflow-y: auto;
+    /* Remove the inner panel border to avoid double borders */
+    border: none !important;
+    border-radius: 0 !important;
+    background: none !important;
+    padding: 12px !important;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table table {
+    table-layout: fixed;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table th:nth-child(1),
+.mineru-queue-bottom-row .mineru-queue-table td:nth-child(1) {
+    width: 35%;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table th:nth-child(2),
+.mineru-queue-bottom-row .mineru-queue-table td:nth-child(2) {
+    width: 15%;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table th:nth-child(3),
+.mineru-queue-bottom-row .mineru-queue-table td:nth-child(3) {
+    width: 10%;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table th:nth-child(4),
+.mineru-queue-bottom-row .mineru-queue-table td:nth-child(4) {
+    width: 15%;
+}
+
+.mineru-queue-bottom-row .mineru-queue-table th:nth-child(5),
+.mineru-queue-bottom-row .mineru-queue-table td:nth-child(5) {
+    width: 25%;
+}
+
+/* Hidden input for queue action communication (in DOM but invisible) */
+.mineru-hidden-input {
+    position: absolute !important;
+    left: -9999px !important;
+    top: -9999px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Hide all children of the hidden input including label */
+.mineru-hidden-input > * {
+    visibility: hidden !important;
+}
+
+.mineru-hidden-input label,
+.mineru-hidden-input span,
+.mineru-hidden-input [data-testid="block-info"],
+.mineru-hidden-input [data-testid="block-label"] {
+    display: none !important;
+}

@@ -149,6 +149,19 @@ async def queue_cancel_task(client: httpx.AsyncClient, task_id: str) -> bool:
     return False
 
 
+async def queue_clear_all(client: httpx.AsyncClient) -> bool:
+    """Clear all tasks from the queue service."""
+    url = get_queue_service_url()
+    if not url:
+        return False
+    try:
+        resp = await client.delete(f"{url}/tasks", timeout=10.0)
+        return resp.status_code == 204
+    except Exception:
+        pass
+    return False
+
+
 async def queue_stats(client: httpx.AsyncClient) -> Optional[dict]:
     """Get queue statistics."""
     url = get_queue_service_url()

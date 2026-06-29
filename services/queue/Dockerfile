@@ -7,7 +7,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    MINERU_API_URL=http://host.docker.internal:8401 \
+    MINERU_REDIS_HOST=redis \
+    MINERU_REDIS_PASSWORD=mineru_queue_redis \
+    MINERU_QUEUE_TMP_DIR=/tmp/mineru-queue \
+    MINERU_QUEUE_OUTPUT_ROOT=/app/output
 
 FROM base AS build
 

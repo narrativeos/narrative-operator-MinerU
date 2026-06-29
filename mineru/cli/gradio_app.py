@@ -63,6 +63,7 @@ from mineru.cli.queue_client import (
     queue_download_result,
     queue_delete_task,
     queue_cancel_task,
+    queue_clear_all,
     queue_stats,
     get_queue_service_url,
 )
@@ -453,8 +454,17 @@ def render_status_steps_html(status_text, i18n, locale=None):
 RESOURCE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'resources')
 
 
-def render_queue_panel_html(tasks, stats, i18n, locale=None):
-    """Render the queue panel HTML with task list and statistics."""
+def render_queue_panel_html(tasks, stats, i18n, locale=None, flat=False):
+    """Render the queue panel HTML with task list and statistics.
+    
+    Args:
+        tasks: List of task dicts
+        stats: Stats dict
+        i18n: Gradio i18n instance
+        locale: Target locale
+        flat: If True, render without the outer .mineru-queue-panel wrapper
+              (used for bottom full-width row to avoid nested borders)
+    """
     # Check if queue service is available
     if not is_queue_enabled():
         return '<div class="mineru-queue-panel hidden"></div>'
@@ -474,15 +484,46 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None):
         f'</div>'
     )
     
+    # Build clear all button
+    clear_all_btn = (
+        f'<button class="mineru-queue-action mineru-queue-clear-all" data-action="clear_all" data-task-id="">'
+        f'{render_client_i18n_text(i18n, "queue_action_clear_all", locale)}</button>'
+    )
+    
+    # Build table header
+    table_head = (
+        '<table>'
+        '<thead><tr>'
+        f'<th>{render_client_i18n_text(i18n, "upload_file", locale)}</th>'
+        f'<th>{render_client_i18n_text(i18n, "convert_status", locale)}</th>'
+        f'<th>{render_client_i18n_text(i18n, "status_step_queue", locale)}</th>'
+        '<th>Time</th>'
+        f'<th>{render_client_i18n_text(i18n, "advanced_options", locale)}</th>'
+        '</tr></thead>'
+    )
+    
+    # Build header
+    header_html = (
+        f'<div class="mineru-queue-panel-header">'
+        f'<span class="mineru-queue-panel-title">{render_client_i18n_text(i18n, "queue_panel_title", locale)}</span>'
+        f'{clear_all_btn}'
+        f'</div>'
+    )
+    
     # Build task rows
     if not tasks:
+        empty_html = f'<div class="mineru-queue-empty">{render_client_i18n_text(i18n, "queue_empty", locale)}</div>'
+        if flat:
+            return (
+                f'{header_html}'
+                f'{stats_html}'
+                f'{empty_html}'
+            )
         return (
             f'<div class="mineru-queue-panel">'
-            f'<div class="mineru-queue-panel-header">'
-            f'<span class="mineru-queue-panel-title">{render_client_i18n_text(i18n, "queue_panel_title", locale)}</span>'
-            f'</div>'
+            f'{header_html}'
             f'{stats_html}'
-            f'<div class="mineru-queue-empty">{render_client_i18n_text(i18n, "queue_empty", locale)}</div>'
+            f'{empty_html}'
             f'</div>'
         )
     
@@ -511,7 +552,12 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None):
         # Action buttons
         actions = ""
         if status == "done":
-            actions = f'<button class="mineru-queue-action" data-action="load" data-task-id="{task_id}">{render_client_i18n_text(i18n, "queue_action_load", locale)}</button>'
+            actions = (
+                f'<button class="mineru-queue-action" data-action="download" data-task-id="{task_id}">'
+                f'{render_client_i18n_text(i18n, "queue_action_download", locale)}</button>'
+                f'<button class="mineru-queue-action" data-action="load" data-task-id="{task_id}">'
+                f'{render_client_i18n_text(i18n, "queue_action_load", locale)}</button>'
+            )
         elif status == "waiting":
             actions = f'<button class="mineru-queue-action" data-action="cancel" data-task-id="{task_id}">{render_client_i18n_text(i18n, "queue_action_cancel", locale)}</button>'
         elif status == "failed":
@@ -530,23 +576,24 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None):
             f'</tr>'
         )
     
+    table_body = f'<tbody>{"".join(rows)}</tbody>'
+    
+    if flat:
+        # Bottom row: no outer wrapper, just header + stats + table
+        return (
+            f'{header_html}'
+            f'{stats_html}'
+            f'<div class="mineru-queue-table">'
+            f'{table_head}{table_body}</table>'
+            f'</div>'
+        )
+    
     return (
-        '<div class="mineru-queue-panel">'
-        '<div class="mineru-queue-panel-header">'
-        f'<span class="mineru-queue-panel-title">{render_client_i18n_text(i18n, "queue_panel_title", locale)}</span>'
-        '</div>'
+        f'<div class="mineru-queue-panel">'
+        f'{header_html}'
         f'{stats_html}'
-        '<div class="mineru-queue-table">'
-        '<table>'
-        '<thead><tr>'
-        f'<th>{render_client_i18n_text(i18n, "upload_file", locale)}</th>'
-        f'<th>{render_client_i18n_text(i18n, "convert_status", locale)}</th>'
-        f'<th>{render_client_i18n_text(i18n, "status_step_queue", locale)}</th>'
-        '<th>Time</th>'
-        f'<th>{render_client_i18n_text(i18n, "advanced_options", locale)}</th>'
-        '</tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody>'
-        '</table>'
+        f'<div class="mineru-queue-table">'
+        f'{table_head}{table_body}</table>'
         '</div>'
         '</div>'
     )
@@ -1769,7 +1816,9 @@ def main(ctx,
             "queue_action_delete": "Delete",
             "queue_submitting": "Submitting to queue...",
             "queue_submitted": "Submitted to queue",
-            "queue_enable": "Use queue mode",
+            "queue_convert": "Queue Convert",
+            "queue_action_download": "Download",
+            "queue_action_clear_all": "Clear All",
         },
         zh={
             "upload_file": "请选择或粘贴要上传的文件\nPDF、图片、DOCX、PPTX 或 XLSX",
@@ -1858,7 +1907,9 @@ def main(ctx,
             "queue_action_delete": "删除",
             "queue_submitting": "提交到队列...",
             "queue_submitted": "已提交到队列",
-            "queue_enable": "使用队列模式",
+            "queue_convert": "队列转换",
+            "queue_action_download": "下载",
+            "queue_action_clear_all": "清除全部",
         },
     )
 
@@ -1962,27 +2013,26 @@ def main(ctx,
             yield update
 
     async def _refresh_queue_panel_http() -> str:
-        """Helper: refresh queue panel using a temporary httpx client."""
+        """Helper: refresh queue panel using a temporary httpx client (flat for bottom row)."""
         if not is_queue_enabled():
-            return render_queue_panel_html([], {}, i18n)
+            return render_queue_panel_html([], {}, i18n, flat=True)
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
                 tasks = await queue_list_tasks(c) or []
                 stats = await queue_stats(c) or {}
-                return render_queue_panel_html(tasks, stats, i18n)
+                return render_queue_panel_html(tasks, stats, i18n, flat=True)
         except Exception:
-            return render_queue_panel_html([], {}, i18n)
+            return render_queue_panel_html([], {}, i18n, flat=True)
 
     def refresh_queue_panel_sync() -> str:
         """Synchronous wrapper for refresh_queue_panel (used in non-async contexts)."""
         try:
             return asyncio.run(_refresh_queue_panel_http())
         except Exception:
-            return render_queue_panel_html([], {}, i18n)
+            return render_queue_panel_html([], {}, i18n, flat=True)
 
-    async def convert_with_queue_support(
+    async def convert_direct(
         file_path,
-        use_queue_flag,
         end_pages=10,
         is_ocr=False,
         formula_enable=True,
@@ -1994,102 +2044,199 @@ def main(ctx,
         url=None,
         request: gr.Request = None,
     ):
-        """Convert with queue support: if use_queue is checked and queue is available, submit to queue."""
+        """Direct conversion (non-queue): immediate processing with stream output."""
+        request_locale = resolve_request_locale(request)
+        async for update in stream_to_markdown(
+            file_path=file_path,
+            end_pages=end_pages,
+            is_ocr=is_ocr,
+            formula_enable=formula_enable,
+            table_enable=table_enable,
+            image_analysis=image_analysis,
+            effort=effort,
+            language=language,
+            backend=backend,
+            url=url,
+            api_url=api_url,
+            client_side_output_generation=client_side_output_generation,
+        ):
+            update = (
+                render_status_steps_html(update[0], i18n, locale=request_locale),
+                update[1],
+                prepare_markdown_for_gradio_preview(update[2], latex_delimiters),
+                *update[3:],
+                refresh_queue_panel_sync(),  # queue_panel
+            )
+            yield update
+
+    async def queue_load_result_handler(task_id: str, request: gr.Request = None):
+        """Load a completed task's result from the queue service into the main UI."""
+        request_locale = resolve_request_locale(request)
+        if not is_queue_enabled() or not task_id:
+            yield (
+                render_status_steps_html("Failed: no task specified", i18n, locale=request_locale),
+                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                refresh_queue_panel_sync(),
+            )
+            return
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as c:
+                task = await queue_get_task(c, task_id)
+            if not task or task.get("status") != "done":
+                yield (
+                    render_status_steps_html(f"Failed: task {task_id} not ready", i18n, locale=request_locale),
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                    refresh_queue_panel_sync(),
+                )
+                return
+            # Download result zip
+            zip_data = await queue_download_result(c, task_id)
+            if not zip_data:
+                yield (
+                    render_status_steps_html(f"Failed: cannot download result for {task_id}", i18n, locale=request_locale),
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                    refresh_queue_panel_sync(),
+                )
+                return
+            # Extract to temp dir
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                tmp.write(zip_data)
+                tmp_path = tmp.name
+            extract_root = Path(tempfile.mkdtemp())
+            try:
+                _api_client.safe_extract_zip(tmp_path, extract_root)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+            file_name = task.get("filename", "").rsplit(".", 1)[0]
+            local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
+            md_path = Path(local_md_dir) / f"{file_name}.md"
+            if md_path.is_file():
+                txt_content = md_path.read_text(encoding="utf-8")
+                md_content = replace_image_with_gradio_file_urls(txt_content, local_md_dir)
+            else:
+                txt_content = ""
+                md_content = ""
+            content_list_json = read_gradio_content_list_json(local_md_dir, file_name)
+            preview_pdf_path = resolve_preview_pdf_path(local_md_dir, file_name)
+            status_html = render_status_steps_html(
+                f"{STATUS_COMPLETED} (loaded from queue: {task_id})",
+                i18n,
+                locale=request_locale,
+            )
+            yield (
+                status_html,
+                None,  # output_file
+                prepare_markdown_for_gradio_preview(md_content, latex_delimiters),
+                txt_content,
+                content_list_json,
+                preview_pdf_path,
+                refresh_queue_panel_sync(),
+            )
+        except Exception as e:
+            status_html = render_status_steps_html(f"Failed: {e}", i18n, locale=request_locale)
+            yield (
+                status_html,
+                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                refresh_queue_panel_sync(),
+            )
+
+    async def queue_action_handler(action: str, task_id: str):
+        """Handle queue actions (cancel, delete, clear_all) triggered from JS."""
+        if not is_queue_enabled():
+            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n), 
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                if action == "clear_all":
+                    await queue_clear_all(c)
+                elif action == "cancel":
+                    await queue_cancel_task(c, task_id)
+                elif action == "delete":
+                    await queue_delete_task(c, task_id)
+                elif action == "load":
+                    # For load, we need to call queue_load_result_handler
+                    # This is handled separately via the JS -> textbox mechanism
+                    pass
+                elif action == "download":
+                    # Download is handled by direct link
+                    pass
+        except Exception:
+            pass
+        return (refresh_queue_panel_sync(), render_status_steps_html("", i18n),
+                gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+
+    def _handle_queue_action_from_js(action_msg, i18n_local):
+        """Sync wrapper to handle queue action messages from JS.
+        Expects format: "action:task_id" e.g. "clear_all:" or "cancel:abc123"
+        """
+        if not action_msg or ":" not in action_msg:
+            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n_local),
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+        action, task_id = action_msg.split(":", 1)
+        try:
+            result = asyncio.run(queue_action_handler(action, task_id))
+            return result
+        except Exception:
+            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n_local),
+                    gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
+
+    async def queue_convert_handler(
+        file_path,
+        end_pages=10,
+        is_ocr=False,
+        formula_enable=True,
+        table_enable=True,
+        image_analysis=True,
+        effort=DEFAULT_HYBRID_EFFORT,
+        language="ch",
+        backend="pipeline",
+        url=None,
+        request: gr.Request = None,
+    ):
+        """Queue conversion: submit to queue service and return immediately."""
         request_locale = resolve_request_locale(request)
 
-        # If queue mode is enabled and queue service is available, submit to queue
-        if use_queue_flag and is_queue_enabled() and file_path is not None:
-            try:
-                normalized_language = normalize_language(language)
-                parse_method = resolve_parse_method(file_path, is_ocr, backend)
-                async with httpx.AsyncClient(timeout=120.0) as c:
-                    result = await queue_submit(
-                        client=c,
-                        file_path=str(file_path),
-                        filename=Path(file_path).name,
-                        backend=backend,
-                        parse_method=parse_method,
-                        lang_list=normalized_language,
-                        formula_enable=formula_enable,
-                        table_enable=table_enable,
-                        image_analysis=image_analysis,
-                        effort=effort,
-                        start_page_id=0,
-                        end_page_id=end_pages - 1,
-                    )
-                if not result:
-                    # Check if queue service URL is set
-                    queue_url = get_queue_service_url()
-                    if not queue_url:
-                        error_msg = "Queue service URL not set (MINERU_QUEUE_SERVICE_URL)"
-                    else:
-                        error_msg = f"Queue submit failed (service at {queue_url} may not be running)"
-                    status_html = render_status_steps_html(
-                        f"Failed: {error_msg}",
-                        i18n,
-                        locale=request_locale,
-                    )
-                    yield (
-                        status_html, gr.skip(), gr.skip(), gr.skip(),
-                        gr.skip(), gr.skip(), refresh_queue_panel_sync(),
-                    )
-                    return
+        if not is_queue_enabled() or file_path is None:
+            queue_url = get_queue_service_url()
+            if not queue_url:
+                error_msg = "Queue service URL not set (MINERU_QUEUE_SERVICE_URL)"
+            else:
+                error_msg = "Queue service is not available"
+            status_html = render_status_steps_html(
+                f"Failed: {error_msg}",
+                i18n,
+                locale=request_locale,
+            )
+            yield (
+                status_html, gr.skip(), gr.skip(), gr.skip(),
+                gr.skip(), gr.skip(), refresh_queue_panel_sync(),
+            )
+            return
 
-                task_id = result.get("task_id", "")
-                status_html = render_status_steps_html(
-                    f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\nTask queued: {task_id}",
-                    i18n,
-                    locale=request_locale,
+        try:
+            normalized_language = normalize_language(language)
+            parse_method = resolve_parse_method(file_path, is_ocr, backend)
+            async with httpx.AsyncClient(timeout=120.0) as c:
+                result = await queue_submit(
+                    client=c,
+                    file_path=str(file_path),
+                    filename=Path(file_path).name,
+                    backend=backend,
+                    parse_method=parse_method,
+                    lang_list=normalized_language,
+                    formula_enable=formula_enable,
+                    table_enable=table_enable,
+                    image_analysis=image_analysis,
+                    effort=effort,
+                    start_page_id=0,
+                    end_page_id=end_pages - 1,
                 )
-                # Initial yield with queue panel
-                yield (
-                    status_html, gr.skip(), gr.skip(), gr.skip(),
-                    gr.skip(), gr.skip(), refresh_queue_panel_sync(),
-                )
-
-                # Poll for task completion (max 2 minutes)
-                for _ in range(60):
-                    time.sleep(2)
-                    async with httpx.AsyncClient(timeout=10.0) as c:
-                        task = await queue_get_task(c, task_id)
-                    if task:
-                        task_status = task.get("status", "")
-                        if task_status == "done":
-                            status_html = render_status_steps_html(
-                                f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\n{STATUS_COMPLETED}",
-                                i18n,
-                                locale=request_locale,
-                            )
-                            yield (
-                                status_html, gr.skip(), gr.skip(), gr.skip(),
-                                gr.skip(), gr.skip(), refresh_queue_panel_sync(),
-                            )
-                            break
-                        elif task_status == "failed":
-                            status_html = render_status_steps_html(
-                                f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\nFailed: {task.get('error', 'unknown')}",
-                                i18n,
-                                locale=request_locale,
-                            )
-                            yield (
-                                status_html, gr.skip(), gr.skip(), gr.skip(),
-                                gr.skip(), gr.skip(), refresh_queue_panel_sync(),
-                            )
-                            break
-                        # Update status for processing
-                        status_html = render_status_steps_html(
-                            f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\n{STATUS_PROCESSING_ON_SERVER}",
-                            i18n,
-                            locale=request_locale,
-                        )
-                    yield (
-                        status_html, gr.skip(), gr.skip(), gr.skip(),
-                        gr.skip(), gr.skip(), refresh_queue_panel_sync(),
-                    )
-
-            except Exception as e:
+            if not result:
+                error_msg = f"Queue submit failed (service at {get_queue_service_url()} may not be running)"
                 status_html = render_status_steps_html(
-                    f"Failed: {e}",
+                    f"Failed: {error_msg}",
                     i18n,
                     locale=request_locale,
                 )
@@ -2097,30 +2244,30 @@ def main(ctx,
                     status_html, gr.skip(), gr.skip(), gr.skip(),
                     gr.skip(), gr.skip(), refresh_queue_panel_sync(),
                 )
-        else:
-            # Original direct API flow
-            async for update in stream_to_markdown(
-                file_path=file_path,
-                end_pages=end_pages,
-                is_ocr=is_ocr,
-                formula_enable=formula_enable,
-                table_enable=table_enable,
-                image_analysis=image_analysis,
-                effort=effort,
-                language=language,
-                backend=backend,
-                url=url,
-                api_url=api_url,
-                client_side_output_generation=client_side_output_generation,
-            ):
-                update = (
-                    render_status_steps_html(update[0], i18n, locale=request_locale),
-                    update[1],
-                    prepare_markdown_for_gradio_preview(update[2], latex_delimiters),
-                    *update[3:],
-                    refresh_queue_panel_sync(),  # queue_panel
-                )
-                yield update
+                return
+
+            task_id = result.get("task_id", "")
+            status_html = render_status_steps_html(
+                f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\nTask queued: {task_id}",
+                i18n,
+                locale=request_locale,
+            )
+            # Return immediately after submitting, queue panel will auto-refresh
+            yield (
+                status_html, gr.skip(), gr.skip(), gr.skip(),
+                gr.skip(), gr.skip(), refresh_queue_panel_sync(),
+            )
+
+        except Exception as e:
+            status_html = render_status_steps_html(
+                f"Failed: {e}",
+                i18n,
+                locale=request_locale,
+            )
+            yield (
+                status_html, gr.skip(), gr.skip(), gr.skip(),
+                gr.skip(), gr.skip(), refresh_queue_panel_sync(),
+            )
 
     suffixes = [f".{suffix}" for suffix in pdf_suffixes + image_suffixes + office_suffixes]
     _blocks_kwargs = {} if IS_GRADIO_6 else {"css": APP_CSS, "js": APP_JS}
@@ -2162,13 +2309,9 @@ def main(ctx,
                 with gr.Row(elem_classes=["mineru-actions"]):
                     change_bu = gr.Button(i18n("convert"), variant="primary", scale=1, min_width=0)
                     clear_bu = gr.ClearButton(value=i18n("clear"), scale=1, min_width=0)
-                # Queue mode toggle (only visible when queue service is available)
-                use_queue = gr.Checkbox(
-                    label=i18n("queue_enable"),
-                    value=False,
-                    visible=is_queue_enabled(),
-                    elem_classes=["mineru-queue-toggle-row"],
-                )
+                # Queue convert button (only visible when queue service is available)
+                with gr.Row(visible=is_queue_enabled(), elem_classes=["mineru-queue-convert-row"]):
+                    queue_convert_bu = gr.Button(i18n("queue_convert"), variant="secondary", scale=1, min_width=0)
                 output_file = gr.File(
                     label=i18n("convert_result"),
                     interactive=False,
@@ -2178,12 +2321,6 @@ def main(ctx,
                     value=render_status_steps_html("", i18n),
                     label=i18n("convert_status"),
                     elem_classes=["mineru-status-panel"],
-                )
-                # Queue panel: shows task queue status when queue service is available
-                queue_panel = gr.HTML(
-                    value=render_queue_panel_html([], {}, i18n),
-                    elem_classes=["mineru-queue-panel"],
-                    visible=is_queue_enabled(),
                 )
 
             _doc_preview_label = "doc preview" if IS_GRADIO_6 else i18n("doc_preview")
@@ -2238,6 +2375,33 @@ def main(ctx,
                             show_label=False,
                             elem_classes=["mineru-content-list-json"],
                         )
+
+        # Queue panel: full-width at the bottom, auto-refreshed
+        if is_queue_enabled():
+            with gr.Row(elem_classes=["mineru-queue-bottom-row"], visible=True):
+                queue_panel = gr.HTML(
+                    value=render_queue_panel_html([], {}, i18n),
+                    elem_classes=["mineru-queue-panel"],
+                )
+            # Hidden textbox to receive queue action messages from JS (must be visible=True to be in DOM)
+            queue_action_input = gr.Textbox(
+                value="",
+                visible=True,
+                elem_id="mineru-queue-action-input",
+                elem_classes=["mineru-hidden-input"],
+            )
+        else:
+            queue_panel = gr.HTML(
+                value='<div class="mineru-queue-panel hidden"></div>',
+                elem_classes=["mineru-queue-panel"],
+                visible=False,
+            )
+            queue_action_input = gr.Textbox(
+                value="",
+                visible=True,
+                elem_id="mineru-queue-action-input",
+                elem_classes=["mineru-hidden-input"],
+            )
 
         if example_enable:
             example_root = os.path.join(os.getcwd(), 'examples')
@@ -2304,13 +2468,27 @@ def main(ctx,
             outputs=[is_ocr, formula_enable, backend],
             **_private_api_kwargs
         )
-        # 添加demo.load事件，在页面加载时触发一次界面更新
+        # 添加demo.load事件，在页面加载时触发一次界面更新 + 加载队列
+        def on_demo_load():
+            return (
+                *build_interface_updates(backend.value if hasattr(backend, 'value') else preferred_option, hybrid_effort.value if hasattr(hybrid_effort, 'value') else DEFAULT_HYBRID_EFFORT),
+                refresh_queue_panel_sync(),
+            )
         demo.load(
-            fn=update_interface,
-            inputs=[backend, hybrid_effort],
-            outputs=[is_ocr, formula_enable, backend],
+            fn=on_demo_load,
+            inputs=[],
+            outputs=[is_ocr, formula_enable, backend, queue_panel],
             **_private_api_kwargs
         )
+
+        # Auto-refresh queue panel every 3 seconds
+        if is_queue_enabled():
+            gr.Timer(3.0).tick(
+                fn=refresh_queue_panel_sync,
+                inputs=[],
+                outputs=[queue_panel],
+                **_private_api_kwargs
+            )
         clear_bu.add([input_file, md, doc_show, md_text, content_list_json, output_file, is_ocr, office_html, status_panel])
 
         def reset_primary_ui():
@@ -2363,11 +2541,25 @@ def main(ctx,
             }
         )
         change_bu.click(
-            fn=convert_with_queue_support,
-            inputs=[input_file, use_queue, max_pages, is_ocr, formula_enable, table_enable, image_analysis, hybrid_effort, language, backend, url],
+            fn=convert_direct,
+            inputs=[input_file, max_pages, is_ocr, formula_enable, table_enable, image_analysis, hybrid_effort, language, backend, url],
             outputs=[status_panel, output_file, md, md_text, content_list_json, doc_show, queue_panel],
             **_to_md_api_kwargs
         )
+        if is_queue_enabled():
+            queue_convert_bu.click(
+                fn=queue_convert_handler,
+                inputs=[input_file, max_pages, is_ocr, formula_enable, table_enable, image_analysis, hybrid_effort, language, backend, url],
+                outputs=[status_panel, output_file, md, md_text, content_list_json, doc_show, queue_panel],
+                **_private_api_kwargs
+            )
+            # Handle queue action button clicks from JS (cancel, delete, clear_all, download, load)
+            queue_action_input.change(
+                fn=lambda action_msg: _handle_queue_action_from_js(action_msg, i18n),
+                inputs=[queue_action_input],
+                outputs=[queue_panel, status_panel, output_file, md, md_text, content_list_json, doc_show, queue_action_input],
+                **_private_api_kwargs
+            )
 
     demo.queue(default_concurrency_limit=None)
 
