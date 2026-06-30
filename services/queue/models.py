@@ -47,6 +47,8 @@ class QueueTask:
     result_dir: Optional[str] = None
     # Queue position (computed on demand)
     queue_position: Optional[int] = None
+    # Internal queue order (used by SQLite backend for FIFO ordering)
+    _queue_order: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = asdict(self)

@@ -9,10 +9,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     MINERU_API_URL=http://host.docker.internal:8401 \
-    MINERU_REDIS_HOST=redis \
-    MINERU_REDIS_PASSWORD=mineru_queue_redis \
     MINERU_QUEUE_TMP_DIR=/tmp/mineru-queue \
-    MINERU_QUEUE_OUTPUT_ROOT=/app/output
+    MINERU_QUEUE_OUTPUT_ROOT=/app/output \
+    MINERU_QUEUE_DB_PATH=/app/output/mineru_queue.db
 
 FROM base AS build
 
@@ -63,7 +62,7 @@ VOLUME [ "/tmp/mineru-queue", "/app/output" ]
 
 # Copy application code into a package (named mineru_queue to avoid stdlib 'queue' conflict)
 RUN mkdir -p /app/mineru_queue
-COPY __init__.py app.py consumer.py models.py redis_client.py /app/mineru_queue/
+COPY __init__.py app.py consumer.py models.py sqlite_queue.py /app/mineru_queue/
 
 # Copy entrypoint
 COPY entrypoint.sh /app/entrypoint.sh

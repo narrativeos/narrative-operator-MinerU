@@ -1,5 +1,5 @@
 # Task consumer for queue service
-# This module processes tasks from the Redis queue by calling the MinerU FastAPI service
+# This module processes tasks from the SQLite queue by calling the MinerU FastAPI service
 
 import asyncio
 import httpx
@@ -16,7 +16,7 @@ from typing import Optional
 from loguru import logger
 
 from .models import QueueTask
-from .redis_client import queue_manager, get_output_root
+from .sqlite_queue import queue_manager, get_output_root
 
 
 def format_timestamp(ts: Optional[float]) -> Optional[str]:
@@ -26,8 +26,12 @@ def format_timestamp(ts: Optional[float]) -> Optional[str]:
 
 
 def get_mineru_api_url() -> str:
-    """Get the MinerU FastAPI URL from environment variable."""
-    return os.getenv("MINERU_API_URL", "http://host.docker.internal:8000")
+    """Get the MinerU FastAPI URL from environment variable.
+    
+    Default to localhost:8401 for local development (Gradio's built-in FastAPI).
+    Use host.docker.internal when running in Docker.
+    """
+    return os.getenv("MINERU_API_URL", "http://localhost:8401")
 
 
 async def process_single_task(task: QueueTask) -> str:
@@ -38,7 +42,8 @@ async def process_single_task(task: QueueTask) -> str:
     task_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Read the uploaded file from temp storage
-    temp_file_dir = Path(os.getenv("MINERU_QUEUE_TMP_DIR", "/tmp/mineru-queue"))
+    # Default matches embedded mode (./input), Docker uses /tmp/mineru-queue via env
+    temp_file_dir = Path(os.getenv("MINERU_QUEUE_TMP_DIR", "./input"))
     file_path = temp_file_dir / f"{task.task_id}_{task.filename}"
 
     if not file_path.exists():

@@ -57,6 +57,7 @@ from mineru.utils.ocr_language import PUBLIC_OCR_LANGUAGE_CHOICES
 # Queue service client
 from mineru.cli.queue_client import (
     is_queue_enabled,
+    is_http_mode,
     queue_submit,
     queue_list_tasks,
     queue_get_task,
@@ -66,6 +67,7 @@ from mineru.cli.queue_client import (
     queue_clear_all,
     queue_stats,
     get_queue_service_url,
+    init_embedded_queue,
 )
 
 _gradio_local_api_server = _api_client.ReusableLocalAPIServer()
@@ -1734,6 +1736,9 @@ def main(ctx,
         server_name, server_port, api_url, enable_vlm_preload,
         client_side_output_generation, latex_delimiters_type, **kwargs
 ):
+
+    # Initialize embedded queue (starts consumer thread for in-process task processing)
+    init_embedded_queue()
 
     # 创建 i18n 实例，支持中英文
     i18n = gr.I18n(

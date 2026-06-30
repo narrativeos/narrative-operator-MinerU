@@ -14,12 +14,12 @@ from loguru import logger
 
 from .consumer import start_consumer_thread
 from .models import QueueTask, TaskStatus, QueueStats
-from .redis_client import queue_manager, get_output_root, get_queue_max_size
+from .sqlite_queue import queue_manager, get_output_root, get_queue_max_size
 
 
 app = FastAPI(
     title="MinerU Queue Service",
-    description="Redis-backed task queue service for MinerU PDF parsing",
+    description="SQLite-backed task queue service for MinerU PDF parsing",
     version="1.0.0",
 )
 
