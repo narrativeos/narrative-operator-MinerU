@@ -11,7 +11,10 @@ data-preparation1
 __pycache__
 *.log
 *.pyc
-.vscode
+# .vscode (keep launch.json and tasks.json for debugging)
+.vscode/
+!.vscode/launch.json
+!.vscode/tasks.json
 debug/
 *.ipynb
 .idea
@@ -35,8 +38,6 @@ app/tests/*
 temp/
 tmp/
 tmp
-.vscode
-.vscode/
 ocr_demo
 .coveragerc
 /app/common/__init__.py
@@ -58,3 +59,8 @@ _build/
 
 output/
 uv.lock
+
+# Debug helper scripts
+debug_gradio.py
+debug_fastapi.py
+debug_vlm.py

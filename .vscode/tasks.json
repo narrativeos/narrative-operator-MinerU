@@ -1,0 +1,87 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start MinerU Gradio",
+      "type": "shell",
+      "command": "python -m mineru.cli.gradio_app --server-name 0.0.0.0 --server-port 8400 --enable-api true --enable-ui-cache --max-convert-pages 1500 --batch-max-convert-pages 100 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "new",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Start MinerU FastAPI",
+      "type": "shell",
+      "command": "python -m mineru.cli.fast_api --host 0.0.0.0 --port 8401 --enable-api-cache --max-convert-pages 1500 --batch-max-convert-pages 100 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "new",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Start MinerU VLM Server",
+      "type": "shell",
+      "command": "python -m mineru.cli.vlm_server --host 0.0.0.0 --port 8402 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "new",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Start MinerU All Services",
+      "type": "shell",
+      "command": "bash scripts/start_mineru_local.sh all",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "new",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "pip install -e '.[all]'",
+      "group": "build",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

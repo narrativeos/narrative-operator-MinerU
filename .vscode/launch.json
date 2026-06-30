@@ -1,0 +1,108 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug MinerU VLM Server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "mineru.cli.vlm_server",
+      "args": [
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8402",
+        "--data-parallel-size",
+        "1",
+        "--gpu-memory-utilization",
+        "0.4"
+      ],
+      "justMyCode": false,
+      "env": {
+        "MINERU_MODEL_SOURCE": "modelscope",
+        "MINERU_HYBRID_BATCH_RATIO": "1",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Debug MinerU FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "mineru.cli.fast_api",
+      "args": [
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8401",
+        "--enable-api-cache",
+        "--max-convert-pages",
+        "1500",
+        "--batch-max-convert-pages",
+        "100",
+        "--data-parallel-size",
+        "1",
+        "--gpu-memory-utilization",
+        "0.4"
+      ],
+      "justMyCode": false,
+      "env": {
+        "MINERU_MODEL_SOURCE": "modelscope",
+        "MINERU_HYBRID_BATCH_RATIO": "1",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Debug MinerU Gradio",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/debug_gradio.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "MINERU_MODEL_SOURCE": "modelscope",
+        "MINERU_HYBRID_BATCH_RATIO": "1",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Debug MinerU FastAPI (Terminal)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/debug_fastapi.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "MINERU_MODEL_SOURCE": "modelscope",
+        "MINERU_HYBRID_BATCH_RATIO": "1",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Debug MinerU VLM (Terminal)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/debug_vlm.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "MINERU_MODEL_SOURCE": "modelscope",
+        "MINERU_HYBRID_BATCH_RATIO": "1",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
