@@ -1,101 +1,103 @@
 # 队列服务模式
 
-队列服务允许将文档解析任务提交到 Redis 队列中，由消费者异步处理，支持高并发场景。
+队列服务允许将文档解析任务提交到 SQLite 队列中，由消费者异步处理，支持高并发场景。
 
 ## 架构说明
 
-队列服务由两个 Docker 容器组成：
-- `mineru-redis`: 独立 Redis 实例，仅在内网通信，不对外开放端口
-- `mineru-queue`: 队列管理服务，提供 HTTP API (端口 8403)
+队列使用 SQLite 作为后端，无需 Redis 或额外 Docker 容器。队列功能内嵌在 Gradio 应用中，本地开发无需任何额外部署。
 
-## 两种部署模式
+## 两种使用模式
 
-### 模式一：Mac 本地开发（MinerU 在宿主机）
+### 模式一：内嵌模式（默认，推荐本地开发）
 
-适用于 macOS 等没有 GPU 的环境，MinerU FastAPI 运行在宿主机上。
+队列直接内嵌在 Gradio 进程中，使用 SQLite 存储任务数据，无需任何额外服务。
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Docker Network (docker_mineru-queue)            │
+│  Gradio 进程 (:8400)                             │
 │                                                   │
-│  ┌──────────────┐    内部网络    ┌──────────────┐
-│  │ mineru-redis  │ ◄──────────► │ mineru-queue  │
-│  │ :6379 (内部)  │               │ :8403 (外部)  │
-│  └──────────────┘                └──────┬───────┘
-│                                        │
-│                              host.docker.internal:8401
-│                                        │
-│                                        ▼
-│                              ┌──────────────────┐
-│                              │ MinerU FastAPI    │
-│                              │ (宿主机)          │
-│                              └──────────────────┘
+│  ┌──────────────┐    ┌──────────────┐            │
+│  │  Gradio UI   │ ──►│  Queue       │            │
+│  │              │     │  (SQLite)    │            │
+│  └──────────────┘     └──────┬───────┘            │
+│                              │                     │
+│                              ▼                     │
+│                       ┌──────────────┐            │
+│                       │  Consumer    │            │
+│                       │  (后台线程)   │            │
+│                       └──────┬───────┘            │
+│                              │                     │
+│                              ▼                     │
+│                       ┌──────────────┐            │
+│                       │ MinerU API   │            │
+│                       │ (:8401)      │            │
+│                       └──────────────┘            │
 └─────────────────────────────────────────────────┘
 ```
 
 **特点：**
-- MinerU FastAPI 运行在宿主机（使用 CPU 或 MLX）
-- 队列容器通过 `host.docker.internal` 访问宿主机 API
-- 适合开发测试环境
+- 无需 Docker、Redis 或任何额外服务
+- 启动 Gradio 时队列自动启用
+- SQLite 数据库存储在 `./output/mineru_queue.db`
+- 上传文件暂存于 `./input/` 目录
+- 结果输出到 `./output/` 目录
 
 **启动方式：**
 ```bash
-# 1. 在宿主机启动 MinerU FastAPI
-python -m mineru.cli.fast_api --host 0.0.0.0 --port 8401
+# 一键启动所有服务（包含内嵌队列）
+bash scripts/start_mineru_local.sh all
 
-# 2. 启动队列服务
-docker compose -f docker/compose.queue.yml up -d
+# 或只启动 Gradio（队列自动启用）
+bash scripts/start_mineru_local.sh gradio
 ```
 
-### 模式二：GPU 服务器部署（MinerU 在 Docker 中）
+### 模式二：远程队列模式（Docker 部署）
 
-适用于有 GPU 的 Linux 服务器，MinerU FastAPI 也在 Docker 容器中运行。
+适用于需要独立队列服务的高并发场景，队列作为独立 Docker 容器运行。
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Docker Network (docker_mineru-queue)                    │
-│                                                          │
-│  ┌──────────────┐    ┌──────────────┐    ┌────────────┐ │
-│  │ mineru-redis  │ ◄─► │ mineru-queue │ ◄─► │ mineru-api │ │
-│  │ :6379 (内部)  │     │ :8403 (外部) │     │ :8401 (内部)│ │
-│  └──────────────┘     └──────────────┘     └─────┬────┘ │
-│                                                   │     │
-│                                          GPU 设备映射   │
-│                                          NVIDIA/AMD GPU  │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  Docker Network                                   │
+│                                                   │
+│  ┌──────────────┐    ┌──────────────┐            │
+│  │ mineru-queue  │ ◄─►│ mineru-api   │            │
+│  │ :8403 (外部)  │     │ :8401 (内部) │            │
+│  │ (SQLite)     │     │ (GPU)        │            │
+│  └──────────────┘     └──────────────┘            │
+└─────────────────────────────────────────────────┘
 ```
 
 **特点：**
-- MinerU FastAPI 运行在 Docker 容器中（使用 GPU）
-- 所有服务在同一 Docker 网络内通信
+- 队列服务独立部署，可水平扩展多个 consumer
+- 使用 SQLite 替代 Redis，无需额外数据库
 - 适合生产环境
 
 **启动方式：**
 ```bash
-# 修改 compose.queue.yml，添加 mineru-api 服务
-# 设置 MINERU_API_URL=http://mineru-api:8401
-# 添加 GPU 设备映射到 mineru-api 容器
-
+# 启动队列服务（Docker）
 docker compose -f docker/compose.queue.yml up -d
+
+# 设置环境变量指向远程队列
+export MINERU_QUEUE_SERVICE_URL=http://queue-server:8403
+
+# 启动 Gradio（将使用远程队列）
+bash scripts/start_mineru_local.sh gradio
 ```
 
 ## 配置参数
 
-### Redis 配置
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `MINERU_REDIS_HOST` | `redis` | Redis 主机名 |
-| `MINERU_REDIS_PORT` | `6379` | Redis 端口 |
-| `MINERU_REDIS_PASSWORD` | `mineru_queue_redis` | Redis 密码 |
-| `MINERU_REDIS_DB` | `0` | Redis 数据库编号 |
-
 ### 队列配置
+
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `MINERU_API_URL` | `http://host.docker.internal:8401` | MinerU FastAPI 地址 |
+| `MINERU_QUEUE_SERVICE_URL` | 未设置（内嵌模式） | 远程队列服务地址 |
+| `MINERU_API_URL` | `http://localhost:8401` | MinerU FastAPI 地址 |
 | `MINERU_QUEUE_MAX_SIZE` | `20` | 最大队列长度 |
 | `MINERU_QUEUE_RESULT_TTL` | `86400` | 结果保留时间（秒） |
 | `MINERU_QUEUE_POLL_INTERVAL` | `1.0` | 轮询间隔（秒） |
+| `MINERU_QUEUE_TMP_DIR` | `./input` | 上传文件暂存目录 |
+| `MINERU_QUEUE_OUTPUT_ROOT` | `./output` | 结果输出目录 |
+| `MINERU_QUEUE_DB_PATH` | `./output/mineru_queue.db` | SQLite 数据库路径 |
 
 ## API 端点
 
@@ -112,6 +114,6 @@ docker compose -f docker/compose.queue.yml up -d
 
 ## 安全说明
 
-- Redis 不对外开放端口，仅通过 Docker 内部网络通信
-- Redis 使用密码保护，默认密码为 `mineru_queue_redis`
-- 生产环境建议修改默认密码
+- 内嵌模式下队列仅在本机可用，不暴露网络端口
+- Docker 模式下队列服务仅监听指定端口
+- 生产环境建议配合反向代理和认证使用
