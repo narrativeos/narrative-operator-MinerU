@@ -897,6 +897,7 @@ def doc_analyze(
         server_url: str | None = None,
         image_analysis: bool = True,
         effort: str = "medium",
+        progress_callback=None,
         **kwargs,
 ):
     effort = _validate_parse_effort(effort)
@@ -1058,6 +1059,11 @@ def doc_analyze(
                         _ocr_enable=_ocr_enable,
                         progress_bar=progress_bar,
                     )
+                    # Report progress to callback
+                    if progress_callback is not None:
+                        pages_processed = int(progress_bar.n) if hasattr(progress_bar, "n") else len(model_list)
+                        percent = int((pages_processed / page_count) * 100) if page_count > 0 else 0
+                        progress_callback(percent, pages_processed, page_count, "text_recognition")
                     last_append_end_time = time.time()
                 finally:
                     _close_images(images_list)
@@ -1105,6 +1111,7 @@ async def aio_doc_analyze(
     server_url: str | None = None,
     image_analysis: bool = True,
     effort: str = "medium",
+    progress_callback=None,
     **kwargs,
 ):
     effort = _validate_parse_effort(effort)

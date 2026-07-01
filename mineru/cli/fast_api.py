@@ -180,6 +180,11 @@ class AsyncParseTask:
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None
+    # Progress tracking fields
+    progress_percent: int = 0
+    current_page: int = 0
+    total_pages: int = 0
+    current_stage: Optional[str] = None
 
     def to_status_payload(
         self,
@@ -201,6 +206,13 @@ class AsyncParseTask:
             "result_url": str(
                 request.url_for("get_async_task_result", task_id=self.task_id)
             ),
+        }
+        # Add progress information
+        payload["progress"] = {
+            "percent": self.progress_percent,
+            "current_page": self.current_page,
+            "total_pages": self.total_pages,
+            "stage": self.current_stage,
         }
         if queued_ahead is not None:
             payload["queued_ahead"] = queued_ahead
@@ -512,6 +524,11 @@ def create_result_zip(
     return_images: bool,
     return_original_file: bool,
 ) -> str:
+    """Create a ZIP file with the same structure as Gradio's compress_directory_to_zip.
+    
+    Each file's parse_dir is compressed directly (without an extra pdf_name folder layer),
+    matching the behavior of Gradio's compress_directory_to_zip(local_md_dir, ...).
+    """
     zip_fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix="mineru_results_")
     os.close(zip_fd)
 
@@ -526,93 +543,12 @@ def create_result_zip(
             if not os.path.exists(parse_dir):
                 continue
 
-            if return_md:
-                path = os.path.join(parse_dir, f"{pdf_name}.md")
-                if os.path.exists(path):
-                    zf.write(
-                        path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            f"{pdf_name}.md",
-                        ),
-                    )
-
-            if return_middle_json:
-                path = os.path.join(parse_dir, f"{pdf_name}_middle.json")
-                if os.path.exists(path):
-                    zf.write(
-                        path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            f"{pdf_name}_middle.json",
-                        ),
-                    )
-
-            if return_model_output:
-                path = os.path.join(parse_dir, f"{pdf_name}_model.json")
-                if os.path.exists(path):
-                    zf.write(
-                        path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            f"{pdf_name}_model.json",
-                        ),
-                    )
-
-            if return_content_list:
-                path = os.path.join(parse_dir, f"{pdf_name}_content_list.json")
-                if os.path.exists(path):
-                    zf.write(
-                        path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            f"{pdf_name}_content_list.json",
-                        ),
-                    )
-
-                path = os.path.join(parse_dir, f"{pdf_name}_content_list_v2.json")
-                if os.path.exists(path):
-                    zf.write(
-                        path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            f"{pdf_name}_content_list_v2.json",
-                        ),
-                    )
-
-            if return_images:
-                images_dir = os.path.join(parse_dir, "images")
-                image_paths = get_images_dir_image_paths(images_dir)
-                for image_path in image_paths:
-                    zf.write(
-                        image_path,
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            os.path.join("images", os.path.basename(image_path)),
-                        ),
-                    )
-
-            if return_original_file:
-                origin_pattern = f"{pdf_name}_origin."
-                for path in sorted(Path(parse_dir).iterdir()):
-                    if not path.is_file():
-                        continue
-                    if not path.name.startswith(origin_pattern):
-                        continue
-                    zf.write(
-                        str(path),
-                        arcname=build_zip_arcname(
-                            pdf_name,
-                            parse_dir,
-                            path.name,
-                        ),
-                    )
+            # Compress the entire parse_dir directly, same as Gradio's compress_directory_to_zip
+            for root, dirs, files in os.walk(parse_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, parse_dir)
+                    zf.write(file_path, arcname)
     return zip_path
 
 
@@ -835,6 +771,7 @@ async def run_parse_job(
     uploads: list[StoredUpload],
     request_options: ParseRequestOptions | AsyncParseTask,
     config: dict[str, Any],
+    progress_callback: Optional[Any] = None,
 ) -> list[str]:
     pdf_file_names, pdf_bytes_list = await asyncio.to_thread(load_parse_inputs, uploads)
     actual_lang_list = normalize_lang_list(request_options.lang_list, len(pdf_file_names))
@@ -868,6 +805,7 @@ async def run_parse_job(
             "client_side_output_generation",
             False,
         ),
+        progress_callback=progress_callback,
         **config,
     )
 
@@ -1220,6 +1158,10 @@ class AsyncTaskManager:
             upload_names=task.upload_names,
             uploads=task.uploads,
             submit_order=task.submit_order,
+            progress_percent=task.progress_percent,
+            current_page=task.current_page,
+            total_pages=task.total_pages,
+            current_stage=task.current_stage,
         )
         self._sqlite._save_task(sqlite_task)
 
@@ -1271,6 +1213,10 @@ class AsyncTaskManager:
             started_at=started_at,
             completed_at=completed_at,
             error=sqlite_task.error,
+            progress_percent=sqlite_task.progress_percent,
+            current_page=sqlite_task.current_page,
+            total_pages=sqlite_task.total_pages,
+            current_stage=sqlite_task.current_stage,
         )
 
     async def _process_task(self, task_id: str) -> None:
@@ -1293,10 +1239,29 @@ class AsyncTaskManager:
             self._signal_task_event(task_id)
             logger.exception(f"Async task failed: {task_id}")
 
+    def _update_task_progress(
+        self,
+        task: AsyncParseTask,
+        percent: int,
+        current_page: int,
+        total_pages: int,
+        stage: str,
+    ) -> None:
+        """Update task progress and persist to SQLite."""
+        task.progress_percent = percent
+        task.current_page = current_page
+        task.total_pages = total_pages
+        task.current_stage = stage
+        self._persist_task(task)
+
     async def _run_task(self, task: AsyncParseTask) -> None:
         task.status = TASK_PROCESSING
         task.started_at = utc_now_iso()
         task.error = None
+        task.progress_percent = 0
+        task.current_page = 0
+        task.total_pages = 0
+        task.current_stage = None
         self._persist_task(task)
 
         uploads = [
@@ -1312,12 +1277,20 @@ class AsyncTaskManager:
             )
         ]
         config = getattr(self.app.state, "config", {})
+
+        # Create a progress callback that updates the task's progress fields
+        def progress_callback(percent: int, current_page: int, total_pages: int, stage: str) -> None:
+            self._update_task_progress(task, percent, current_page, total_pages, stage)
+
         await run_parse_job(
             output_dir=task.output_dir,
             uploads=uploads,
             request_options=task,
             config=config,
+            progress_callback=progress_callback,
         )
+        task.progress_percent = 100
+        task.current_stage = "completed"
         task.status = TASK_COMPLETED
         task.completed_at = utc_now_iso()
         self._persist_task(task)

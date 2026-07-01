@@ -68,6 +68,11 @@ class SQLiteQueueTask:
         upload_names: Optional[list] = None,
         uploads: Optional[list] = None,
         submit_order: int = 0,
+        # Progress tracking fields
+        progress_percent: int = 0,
+        current_page: int = 0,
+        total_pages: int = 0,
+        current_stage: Optional[str] = None,
     ):
         self.task_id = task_id
         self.filename = filename
@@ -102,6 +107,11 @@ class SQLiteQueueTask:
         self.upload_names = upload_names or [filename]
         self.uploads = uploads or []
         self.submit_order = submit_order
+        # Progress tracking
+        self.progress_percent = progress_percent
+        self.current_page = current_page
+        self.total_pages = total_pages
+        self.current_stage = current_stage
 
     def to_dict(self) -> dict:
         return {
@@ -142,6 +152,13 @@ class SQLiteQueueTask:
             "result_url": str(
                 request.url_for("get_async_task_result", task_id=self.task_id)
             ),
+        }
+        # Add progress information
+        payload["progress"] = {
+            "percent": self.progress_percent,
+            "current_page": self.current_page,
+            "total_pages": self.total_pages,
+            "stage": self.current_stage,
         }
         if queued_ahead is not None:
             payload["queued_ahead"] = queued_ahead
@@ -222,6 +239,11 @@ class SQLiteQueueManager:
         self._ensure_column("server_url", "TEXT")
         self._ensure_column("upload_names", "TEXT")
         self._ensure_column("uploads", "TEXT")
+        # Progress tracking columns
+        self._ensure_column("progress_percent", "INTEGER DEFAULT 0")
+        self._ensure_column("current_page", "INTEGER DEFAULT 0")
+        self._ensure_column("total_pages", "INTEGER DEFAULT 0")
+        self._ensure_column("current_stage", "TEXT")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_status_order ON tasks(status, queue_order)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_submit_order ON tasks(submit_order)")
@@ -282,6 +304,10 @@ class SQLiteQueueManager:
             upload_names=parse_json(d.get("upload_names")),
             uploads=parse_json(d.get("uploads")),
             submit_order=d.get("submit_order", 0),
+            progress_percent=d.get("progress_percent", 0) or 0,
+            current_page=d.get("current_page", 0) or 0,
+            total_pages=d.get("total_pages", 0) or 0,
+            current_stage=d.get("current_stage"),
         )
 
     def _save_task(self, task: SQLiteQueueTask) -> None:
@@ -295,8 +321,9 @@ class SQLiteQueueManager:
                     output_dir, return_md, return_middle_json, return_model_output,
                     return_content_list, return_images, response_format_zip,
                     return_original_file, client_side_output_generation, server_url,
-                    upload_names, uploads, submit_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    upload_names, uploads, submit_order,
+                    progress_percent, current_page, total_pages, current_stage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     filename=excluded.filename, file_size=excluded.file_size,
                     status=excluded.status, backend=excluded.backend,
@@ -316,7 +343,11 @@ class SQLiteQueueManager:
                     return_original_file=excluded.return_original_file,
                     client_side_output_generation=excluded.client_side_output_generation,
                     server_url=excluded.server_url, upload_names=excluded.upload_names,
-                    uploads=excluded.uploads, submit_order=excluded.submit_order
+                    uploads=excluded.uploads, submit_order=excluded.submit_order,
+                    progress_percent=excluded.progress_percent,
+                    current_page=excluded.current_page,
+                    total_pages=excluded.total_pages,
+                    current_stage=excluded.current_stage
             """, (
                 task.task_id, task.filename, task.file_size, task.status,
                 task.backend, task.parse_method,
@@ -334,6 +365,10 @@ class SQLiteQueueManager:
                 json.dumps(task.upload_names) if task.upload_names else None,
                 json.dumps(task.uploads) if task.uploads else None,
                 task.submit_order,
+                task.progress_percent,
+                task.current_page,
+                task.total_pages,
+                task.current_stage,
             ))
 
     def submit_task(self, task: SQLiteQueueTask) -> int:

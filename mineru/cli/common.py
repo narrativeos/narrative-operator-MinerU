@@ -365,7 +365,8 @@ def _process_pipeline(
         f_dump_content_list,
         f_make_md_mode,
         client_side_output_generation=False,
-):
+        progress_callback=None,
+    ):
     """处理pipeline后端逻辑"""
     from mineru.backend.pipeline.pipeline_analyze import doc_analyze_streaming as pipeline_doc_analyze_streaming
 
@@ -437,8 +438,9 @@ async def _async_process_vlm(
         f_dump_content_list,
         f_make_md_mode,
         server_url=None,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     """异步处理VLM后端逻辑"""
     parse_method = "vlm"
     f_draw_span_bbox = False
@@ -453,6 +455,10 @@ async def _async_process_vlm(
         middle_json, infer_result = await aio_vlm_doc_analyze(
             pdf_bytes, image_writer=image_writer, backend=backend, server_url=server_url, **kwargs,
         )
+
+        if progress_callback:
+            total_pages = len(middle_json.get("pdf_info", []))
+            progress_callback(100, total_pages, total_pages, "vlm_inference")
 
         pdf_info = middle_json["pdf_info"]
 
@@ -478,8 +484,9 @@ def _process_vlm(
         f_dump_content_list,
         f_make_md_mode,
         server_url=None,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     """同步处理VLM后端逻辑"""
     parse_method = "vlm"
     f_draw_span_bbox = False
@@ -494,6 +501,10 @@ def _process_vlm(
         middle_json, infer_result = vlm_doc_analyze(
             pdf_bytes, image_writer=image_writer, backend=backend, server_url=server_url, **kwargs,
         )
+
+        if progress_callback:
+            total_pages = len(middle_json.get("pdf_info", []))
+            progress_callback(100, total_pages, total_pages, "vlm_inference")
 
         pdf_info = middle_json["pdf_info"]
 
@@ -522,8 +533,9 @@ def _process_hybrid(
         f_make_md_mode,
         server_url=None,
         effort=DEFAULT_HYBRID_EFFORT,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     hybrid_doc_analyze = _load_hybrid_analyze_entrypoint(
         "doc_analyze",
         f"hybrid-{backend}",
@@ -545,6 +557,7 @@ def _process_hybrid(
             inline_formula_enable=inline_formula_enable,
             server_url=server_url,
             effort=validate_effort(effort),
+            progress_callback=progress_callback,
             **kwargs,
         )
 
@@ -577,8 +590,9 @@ async def _async_process_hybrid(
         f_make_md_mode,
         server_url=None,
         effort=DEFAULT_HYBRID_EFFORT,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     aio_hybrid_doc_analyze = _load_hybrid_analyze_entrypoint(
         "aio_doc_analyze",
         f"hybrid-{backend}",
@@ -600,6 +614,7 @@ async def _async_process_hybrid(
             inline_formula_enable=inline_formula_enable,
             server_url=server_url,
             effort=validate_effort(effort),
+            progress_callback=progress_callback,
             **kwargs,
         )
 
@@ -688,8 +703,9 @@ def do_parse(
         image_analysis=True,
         client_side_output_generation=False,
         effort=DEFAULT_HYBRID_EFFORT,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     backend = normalize_backend(backend)
     need_remove_index = _process_office_doc(
         output_dir,
@@ -720,6 +736,7 @@ def do_parse(
             f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
             f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
             client_side_output_generation=client_side_output_generation,
+            progress_callback=progress_callback,
         )
     else:
         if backend.startswith("vlm-"):
@@ -736,7 +753,8 @@ def do_parse(
                 f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
                 f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
                 server_url, image_analysis=image_analysis,
-                client_side_output_generation=client_side_output_generation, **kwargs,
+                client_side_output_generation=client_side_output_generation,
+                progress_callback=progress_callback, **kwargs,
             )
         elif backend.startswith("hybrid-"):
             ensure_backend_dependencies(backend)
@@ -753,7 +771,8 @@ def do_parse(
                 f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
                 f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
                 server_url, effort=effort, image_analysis=image_analysis,
-                client_side_output_generation=client_side_output_generation, **kwargs,
+                client_side_output_generation=client_side_output_generation,
+                progress_callback=progress_callback, **kwargs,
             )
 
 
@@ -780,8 +799,9 @@ async def aio_do_parse(
         image_analysis=True,
         client_side_output_generation=False,
         effort=DEFAULT_HYBRID_EFFORT,
+        progress_callback=None,
         **kwargs,
-):
+    ):
     backend = normalize_backend(backend)
     # Office 解析是同步且可能耗时的操作，异步入口需要放到线程中避免阻塞事件循环。
     need_remove_index = await asyncio.to_thread(
@@ -815,6 +835,7 @@ async def aio_do_parse(
             f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
             f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
             client_side_output_generation=client_side_output_generation,
+            progress_callback=progress_callback,
         )
     else:
         if backend.startswith("vlm-"):
@@ -831,7 +852,8 @@ async def aio_do_parse(
                 f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
                 f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
                 server_url, image_analysis=image_analysis,
-                client_side_output_generation=client_side_output_generation, **kwargs,
+                client_side_output_generation=client_side_output_generation,
+                progress_callback=progress_callback, **kwargs,
             )
         elif backend.startswith("hybrid-"):
             ensure_backend_dependencies(backend)
@@ -848,7 +870,8 @@ async def aio_do_parse(
                 f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
                 f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
                 server_url, effort=effort, image_analysis=image_analysis,
-                client_side_output_generation=client_side_output_generation, **kwargs,
+                client_side_output_generation=client_side_output_generation,
+                progress_callback=progress_callback, **kwargs,
             )
 
 
