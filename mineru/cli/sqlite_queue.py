@@ -9,7 +9,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -518,5 +518,58 @@ class SQLiteQueueManager:
         )
 
 
-# Global queue manager instance
-queue_manager = SQLiteQueueManager()
+# Global queue manager instance - lazy-initialized to avoid spawning issues.
+# When multiprocessing uses 'spawn' (default on macOS), child processes re-import
+# this module at import time. Eager instantiation causes SQLite connection errors
+# in child processes that are not the main API server process.
+#
+# We use a proxy class that lazily creates the real SQLiteQueueManager on first
+# attribute access, so that imports in spawned child processes do not trigger
+# SQLite initialization.
+
+
+_queue_manager_instance: SQLiteQueueManager | None = None
+_queue_manager_lock = threading.Lock()
+
+
+def _get_queue_manager() -> SQLiteQueueManager:
+    """Get the global queue manager instance (thread-safe lazy singleton)."""
+    global _queue_manager_instance
+    if _queue_manager_instance is not None:
+        return _queue_manager_instance
+    with _queue_manager_lock:
+        if _queue_manager_instance is None:
+            _queue_manager_instance = SQLiteQueueManager()
+    return _queue_manager_instance
+
+
+class _QueueManagerProxy:
+    """Lazy-loading proxy for SQLiteQueueManager.
+
+    This proxy does NOT create the real SQLiteQueueManager until an attribute
+    is actually accessed. This prevents SQLite initialization in spawned child
+    processes that import this module but never use the queue manager.
+    """
+
+    __slots__ = ("_real",)
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_real", None)
+
+    def _get_real(self) -> SQLiteQueueManager:
+        if self._real is None:
+            self._real = _get_queue_manager()
+        return self._real
+
+    def __getattr__(self, name: str):
+        return getattr(self._get_real(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_real":
+            object.__setattr__(self, "_real", value)
+        else:
+            setattr(self._get_real(), name, value)
+
+
+# Backward-compatible: import queue_manager and use it like SQLiteQueueManager
+queue_manager = _QueueManagerProxy()
