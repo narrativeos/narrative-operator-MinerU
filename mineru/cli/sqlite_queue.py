@@ -134,6 +134,10 @@ class SQLiteQueueTask:
             "completed_at": _format_ts(self.completed_at),
             "error": self.error,
             "result_dir": self.result_dir,
+            "progress_percent": self.progress_percent,
+            "current_page": self.current_page,
+            "total_pages": self.total_pages,
+            "current_stage": self.current_stage,
         }
 
     def to_status_payload(self, request, queued_ahead: int | None = None) -> dict:

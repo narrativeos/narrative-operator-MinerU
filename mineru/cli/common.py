@@ -382,8 +382,11 @@ def _process_pipeline(
         local_output_info.append((pdf_file_name, local_image_dir, local_md_dir))
 
     output_futures = []
+    total_count = len(pdf_bytes_list)
+    completed_count = 0
 
     def run_output_task(doc_index, middle_json, model_list):
+        nonlocal completed_count
         pdf_file_name, local_image_dir, local_md_dir = local_output_info[doc_index]
         md_writer = md_writer_list[doc_index]
         pdf_bytes = pdf_bytes_list[doc_index]
@@ -396,6 +399,10 @@ def _process_pipeline(
                 f_make_md_mode, middle_json, model_list, process_mode="pipeline"
             )
             logger.debug(f"Pipeline output complete: doc{doc_index}")
+            completed_count += 1
+            if progress_callback:
+                percent = int((completed_count / total_count) * 100) if total_count > 0 else 0
+                progress_callback(percent, completed_count, total_count, "pipeline_output")
         except Exception:
             logger.exception(f"Pipeline output failed: doc{doc_index}")
             raise
@@ -447,10 +454,14 @@ async def _async_process_vlm(
     if not backend.endswith("client"):
         server_url = None
 
+    total_docs = len(pdf_bytes_list)
     for idx, pdf_bytes in enumerate(pdf_bytes_list):
         pdf_file_name = pdf_file_names[idx]
         local_image_dir, local_md_dir = prepare_env(output_dir, pdf_file_name, parse_method)
         image_writer, md_writer = FileBasedDataWriter(local_image_dir), FileBasedDataWriter(local_md_dir)
+
+        if progress_callback:
+            progress_callback(int((idx / total_docs) * 100) if total_docs > 0 else 0, idx, total_docs, "vlm_inference")
 
         middle_json, infer_result = await aio_vlm_doc_analyze(
             pdf_bytes, image_writer=image_writer, backend=backend, server_url=server_url, **kwargs,
@@ -493,10 +504,14 @@ def _process_vlm(
     if not backend.endswith("client"):
         server_url = None
 
+    total_docs = len(pdf_bytes_list)
     for idx, pdf_bytes in enumerate(pdf_bytes_list):
         pdf_file_name = pdf_file_names[idx]
         local_image_dir, local_md_dir = prepare_env(output_dir, pdf_file_name, parse_method)
         image_writer, md_writer = FileBasedDataWriter(local_image_dir), FileBasedDataWriter(local_md_dir)
+
+        if progress_callback:
+            progress_callback(int((idx / total_docs) * 100) if total_docs > 0 else 0, idx, total_docs, "vlm_inference")
 
         middle_json, infer_result = vlm_doc_analyze(
             pdf_bytes, image_writer=image_writer, backend=backend, server_url=server_url, **kwargs,

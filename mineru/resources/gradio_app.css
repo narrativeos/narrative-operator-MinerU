@@ -629,6 +629,24 @@ body.mineru-hide-hybrid-effort .gradio-container .contain .mineru-hybrid-effort-
     color: var(--body-text-color);
 }
 
+/* Progress bar for processing tasks */
+.mineru-queue-progress {
+    width: 100%;
+    max-width: 120px;
+    height: 4px;
+    background: rgba(107, 114, 128, 0.15);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.mineru-queue-progress-bar {
+    height: 100%;
+    background: var(--mineru-accent);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
 /* Hidden queue panel */
 .mineru-queue-panel.hidden {
     display: none !important;

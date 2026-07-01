@@ -569,10 +569,20 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None, flat=False):
         # Error display
         error_html = f'<br/><small style="color: #ef4444">{html_lib.escape(str(error))}</small>' if error else ""
         
+        # Progress display for processing tasks
+        progress_html = ""
+        if status == "processing":
+            progress_percent = task.get("progress_percent") or 0
+            current_page = task.get("current_page") or 0
+            total_pages = task.get("total_pages") or 0
+            current_stage = task.get("current_stage") or ""
+            if total_pages > 0 and progress_percent > 0:
+                progress_html = f'<div class="mineru-queue-progress"><div class="mineru-queue-progress-bar" style="width:{progress_percent}%"></div></div><small>{progress_percent}%{f" ({current_page}/{total_pages})" if total_pages > 0 else ""}{f" {current_stage}" if current_stage else ""}</small>'
+        
         rows.append(
             f'<tr>'
             f'<td>{html_lib.escape(filename)}{error_html}</td>'
-            f'<td><span class="mineru-queue-status {status}">{status_label}</span></td>'
+            f'<td><span class="mineru-queue-status {status}">{status_label}</span><br/>{progress_html}</td>'
             f'<td>{position_display}</td>'
             f'<td>{time_display}</td>'
             f'<td>{actions}</td>'
@@ -808,15 +818,28 @@ def format_remote_status_message(
     if isinstance(status_snapshot, _api_client.TaskStatusSnapshot):
         status = status_snapshot.status
         queued_ahead = status_snapshot.queued_ahead
+        progress_percent = status_snapshot.progress_percent
+        current_page = status_snapshot.current_page
+        total_pages = status_snapshot.total_pages
+        stage = status_snapshot.stage
     else:
         status = status_snapshot
         queued_ahead = None
+        progress_percent = None
+        current_page = None
+        total_pages = None
+        stage = None
 
     if status == "pending":
         if queued_ahead is not None:
             return f"{STATUS_QUEUED_ON_SERVER}: {queued_ahead} request(s) ahead"
         return STATUS_QUEUED_ON_SERVER
     if status == "processing":
+        if progress_percent is not None and total_pages is not None and total_pages > 0:
+            stage_text = f" ({stage})" if stage else ""
+            if current_page is not None:
+                return f"{STATUS_PROCESSING_ON_SERVER} {progress_percent}%{stage_text} ({current_page}/{total_pages} pages)"
+            return f"{STATUS_PROCESSING_ON_SERVER} {progress_percent}%{stage_text}"
         return STATUS_PROCESSING_ON_SERVER
     if status == "completed":
         return STATUS_COMPLETED

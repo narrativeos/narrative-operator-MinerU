@@ -463,6 +463,10 @@ class SubmitResponse:
 class TaskStatusSnapshot:
     status: str
     queued_ahead: int | None = None
+    progress_percent: int | None = None
+    current_page: int | None = None
+    total_pages: int | None = None
+    stage: str | None = None
 
 
 class LocalAPIServer:
@@ -968,11 +972,21 @@ async def wait_for_task_result(
             queued_ahead = payload.get("queued_ahead")
             if not isinstance(queued_ahead, int):
                 queued_ahead = None
+            # Extract progress information from payload
+            progress = payload.get("progress", {}) or {}
+            progress_percent = progress.get("percent")
+            current_page = progress.get("current_page")
+            total_pages = progress.get("total_pages")
+            stage = progress.get("stage")
             if status_snapshot_callback is not None:
                 status_snapshot_callback(
                     TaskStatusSnapshot(
                         status=status,
                         queued_ahead=queued_ahead,
+                        progress_percent=progress_percent,
+                        current_page=current_page,
+                        total_pages=total_pages,
+                        stage=stage,
                     )
                 )
             if status_callback is not None:

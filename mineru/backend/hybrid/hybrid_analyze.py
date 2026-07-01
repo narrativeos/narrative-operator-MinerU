@@ -1,6 +1,7 @@
 # Copyright (c) Opendatalab. All rights reserved.
 import asyncio
 import os
+import threading
 import time
 from collections import defaultdict
 
@@ -886,6 +887,193 @@ def _close_images(images_list):
                 pass
 
 
+# ----- Progress Tracking Helpers -----
+# Default cumulative stage weight ratios within a single processing window.
+# These represent the fraction of window "virtual pages" completed after each stage:
+#   layout: 20%  (individual contribution: 20%)
+#   vlm:    60%  (individual contribution: 40%)
+#   ocr:    80%  (individual contribution: 20%)
+#   output: 100% (individual contribution: 20%, real per-page)
+# Weights are adapted per-window using measured durations.
+_DEFAULT_CUM_RATIOS = {"layout": 0.20, "vlm_extract": 0.60, "ocr_formula": 0.80}
+_DEFAULT_INDIV_RATIOS = {"layout": 0.20, "vlm_extract": 0.40, "ocr_formula": 0.20}
+
+
+def _compute_progress_values(
+    virtual_pages: int,
+    page_count: int,
+    max_percent_seen: list | None = None,
+) -> tuple[int, int]:
+    """Compute progress percent and current_page.
+
+    - Uses round() instead of int() truncation to avoid "stuck at 99%".
+    - Ensures percent never decreases (monotonicity via max_percent_seen).
+    """
+    percent = round((virtual_pages / page_count) * 100) if page_count > 0 else 0
+    percent = min(percent, 100)
+    if max_percent_seen is not None:
+        percent = max(percent, max_percent_seen[0])
+        max_percent_seen[0] = percent
+    current_page = min(virtual_pages, page_count)
+    return percent, current_page
+
+
+def _estimate_stage_duration(
+    stage_durations: dict[str, list[float]],
+    stage_name: str,
+    default: float = 60.0,
+) -> float:
+    """Estimate stage duration using exponential weighted average of historical data."""
+    vals = stage_durations.get(stage_name, [])
+    if not vals:
+        return default
+    if len(vals) == 1:
+        return vals[0]
+    weights = [0.7 ** (len(vals) - 1 - i) for i in range(len(vals))]
+    weight_sum = sum(weights)
+    return sum(v * w for v, w in zip(vals, weights)) / weight_sum
+
+
+def _stage_interpolation_worker(
+    progress_callback,
+    stage_name: str,
+    base_pages: int,
+    range_pages: int,
+    page_count: int,
+    estimated_duration: float,
+    stop_event: threading.Event,
+    max_percent_seen: list,
+    report_interval: float = 2.0,
+):
+    """Background thread: report interpolated progress during a black-box batch call.
+
+    Periodically estimates stage completion based on elapsed time vs. estimated
+    duration. Capped at 95% during interpolation to avoid claiming completion
+    before the actual call finishes.
+    """
+    start_time = time.time()
+    while True:
+        interrupted = stop_event.wait(report_interval)
+        elapsed = time.time() - start_time
+        completion = (
+            min(elapsed / estimated_duration, 0.95) if estimated_duration > 0 else 0.0
+        )
+        virtual_pages = base_pages + int(completion * range_pages)
+        virtual_pages = min(virtual_pages, page_count)
+        percent, current_page = _compute_progress_values(
+            virtual_pages, page_count, max_percent_seen
+        )
+        progress_callback(percent, current_page, page_count, stage_name)
+        if interrupted:
+            break
+
+
+def _compute_adaptive_ratios(
+    stage_durations: dict[str, list[float]],
+    default_cum: dict[str, float] | None = None,
+    default_indiv: dict[str, float] | None = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Compute adaptive stage weight ratios based on historical durations.
+
+    Returns (cumulative_ratios, individual_ratios) for the stage grouping:
+      layout / vlm_extract / ocr_formula
+    Output stage always uses real per-page counts.
+    """
+    if default_cum is None:
+        default_cum = _DEFAULT_CUM_RATIOS
+    if default_indiv is None:
+        default_indiv = _DEFAULT_INDIV_RATIOS
+
+    stages = ["layout", "vlm_extract", "ocr_formula"]
+    # Check if we have any history for all stages
+    if not all(len(stage_durations.get(s, [])) > 0 for s in stages):
+        return dict(default_cum), dict(default_indiv)
+
+    # Compute smoothed durations
+    smoothed = {}
+    total = 0.0
+    for s in stages:
+        vals = stage_durations.get(s, [])
+        if not vals:
+            smoothed[s] = default_indiv.get(s, 0.33)
+        elif len(vals) == 1:
+            smoothed[s] = vals[0]
+        else:
+            weights = [0.7 ** (len(vals) - 1 - i) for i in range(len(vals))]
+            weight_sum = sum(weights)
+            smoothed[s] = sum(v * w for v, w in zip(vals, weights)) / weight_sum
+        total += smoothed[s]
+
+    if total <= 0:
+        return dict(default_cum), dict(default_indiv)
+
+    # Build ratios
+    cumulative = 0.0
+    new_cum = {}
+    new_indiv = {}
+    for s in stages:
+        indiv = smoothed[s] / total
+        cumulative += indiv
+        new_cum[s] = cumulative
+        new_indiv[s] = indiv
+
+    return new_cum, new_indiv
+
+
+def _update_stage_timing(
+    stage_starts: dict[str, float],
+    stage_durations: dict[str, list[float]],
+    stage_name: str,
+) -> None:
+    """Record the actual duration of a completed stage."""
+    elapsed = time.time() - stage_starts.get(stage_name, time.time())
+    stage_durations.setdefault(stage_name, []).append(elapsed)
+
+
+def _launch_stage_interpolation(
+    progress_callback,
+    stage_name: str,
+    stage_starts: dict[str, float],
+    stage_durations: dict[str, list[float]],
+    base_pages: int,
+    range_pages: int,
+    page_count: int,
+    max_percent_seen: list,
+) -> tuple[threading.Event | None, threading.Thread | None]:
+    """Launch a background interpolation thread for a black-box batch stage.
+
+    Returns (stop_event, thread) — caller must stop thread after batch call
+    completes. Returns (None, None) if progress_callback is None (no-op).
+    """
+    if progress_callback is None:
+        return None, None
+
+    stage_starts[stage_name] = time.time()
+    estimated_duration = _estimate_stage_duration(stage_durations, stage_name)
+    stop_event = threading.Event()
+    interp_thread = threading.Thread(
+        target=_stage_interpolation_worker,
+        args=(
+            progress_callback, stage_name, base_pages, range_pages,
+            page_count, estimated_duration, stop_event, max_percent_seen,
+        ),
+        daemon=True,
+    )
+    interp_thread.start()
+    return stop_event, interp_thread
+
+
+def _stop_stage_interpolation(
+    stop_event: threading.Event | None,
+    interp_thread: threading.Thread | None,
+) -> None:
+    """Stop a running interpolation thread."""
+    if stop_event is not None:
+        stop_event.set()
+    if interp_thread is not None:
+        interp_thread.join(timeout=3)
+
+
 def doc_analyze(
         pdf_bytes,
         image_writer: DataWriter | None,
@@ -952,17 +1140,31 @@ def doc_analyze(
                 try:
                     images_pil_list = [image_dict["img_pil"] for image_dict in images_list]
                     page_sizes = [_normalize_page_size(image) for image in images_pil_list]
+                    pages_in_window = len(images_pil_list)
                     logger.info(
                         f'Hybrid processing window {window_index + 1}/{total_windows}: '
                         f'pages {window_start + 1}-{window_end + 1}/{page_count} '
-                        f'({len(images_pil_list)} pages)'
+                        f'({pages_in_window} pages)'
                     )
+                    # Compute base pages already fully processed before this window
+                    base_processed = window_start
                     images_layout_res, hybrid_pipeline_model = _predict_layout_for_window(
                         images_pil_list,
                         inline_formula_enable,
                         batch_ratio,
                         _ocr_enable,
                     )
+                    # Report progress: layout stage done (fast batch call, report directly)
+                    if progress_callback is not None:
+                        stage_starts["layout"] = time.time()
+                        virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["layout"])
+                        virtual_pages = min(virtual_pages, page_count)
+                        percent, current_page = _compute_progress_values(
+                            virtual_pages, page_count, max_percent_seen
+                        )
+                        _update_stage_timing(stage_starts, stage_durations, "layout")
+                        progress_callback(percent, current_page, page_count, "layout")
+
                     if effort == "medium":
                         _apply_medium_table_orientation_labels(
                             images_pil_list,
@@ -978,13 +1180,31 @@ def doc_analyze(
                             )
                             for page_layout_res, pil_img in zip(images_layout_res, images_pil_list)
                         ]
-                        with predictor_execution_guard(predictor):
-                            window_model_list = predictor.batch_extract_with_layout(
-                                images_pil_list,
-                                vlm_blocks_list,
-                                not_extract_list=None if _ocr_enable else not_extract_list,
-                                image_analysis=effective_image_analysis,
+                        vlm_stop, vlm_thread = _launch_stage_interpolation(
+                            progress_callback, "vlm_extract", stage_starts,
+                            stage_durations, base_processed,
+                            int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                            page_count, max_percent_seen,
+                        )
+                        try:
+                            with predictor_execution_guard(predictor):
+                                window_model_list = predictor.batch_extract_with_layout(
+                                    images_pil_list,
+                                    vlm_blocks_list,
+                                    not_extract_list=None if _ocr_enable else not_extract_list,
+                                    image_analysis=effective_image_analysis,
+                                )
+                        finally:
+                            _stop_stage_interpolation(vlm_stop, vlm_thread)
+                        # Report progress: VLM extraction done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
                             )
+                            progress_callback(percent, current_page, page_count, "vlm_extract")
                         optimize_hybrid_formula_number_blocks(window_model_list)
                         if _ocr_enable:
                             _apply_vlm_ocr_det_sidecars_for_window(
@@ -1003,13 +1223,40 @@ def doc_analyze(
                                 images_layout_res=images_layout_res,
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
+                        # Report progress: OCR/formula done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "ocr_formula")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["ocr_formula"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
+                            )
+                            progress_callback(percent, current_page, page_count, "ocr_formula")
                     elif effort == "high":
                         if _ocr_enable:
-                            with predictor_execution_guard(predictor):
-                                window_model_list = predictor.batch_two_step_extract(
-                                    images=images_pil_list,
-                                    image_analysis=effective_image_analysis,
+                            vlm_stop, vlm_thread = _launch_stage_interpolation(
+                                progress_callback, "vlm_extract", stage_starts,
+                                stage_durations, base_processed,
+                                int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                                page_count, max_percent_seen,
+                            )
+                            try:
+                                with predictor_execution_guard(predictor):
+                                    window_model_list = predictor.batch_two_step_extract(
+                                        images=images_pil_list,
+                                        image_analysis=effective_image_analysis,
+                                    )
+                            finally:
+                                _stop_stage_interpolation(vlm_stop, vlm_thread)
+                            # Report progress: VLM extraction done
+                            if progress_callback is not None:
+                                _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                                virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                                virtual_pages = min(virtual_pages, page_count)
+                                percent, current_page = _compute_progress_values(
+                                    virtual_pages, page_count, max_percent_seen
                                 )
+                                progress_callback(percent, current_page, page_count, "vlm_extract")
                             _apply_vlm_ocr_det_sidecars_for_window(
                                 images_pil_list,
                                 window_model_list,
@@ -1018,12 +1265,30 @@ def doc_analyze(
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
                         else:
-                            with predictor_execution_guard(predictor):
-                                window_model_list = predictor.batch_two_step_extract(
-                                    images=images_pil_list,
-                                    not_extract_list=not_extract_list,
-                                    image_analysis=effective_image_analysis,
+                            vlm_stop, vlm_thread = _launch_stage_interpolation(
+                                progress_callback, "vlm_extract", stage_starts,
+                                stage_durations, base_processed,
+                                int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                                page_count, max_percent_seen,
+                            )
+                            try:
+                                with predictor_execution_guard(predictor):
+                                    window_model_list = predictor.batch_two_step_extract(
+                                        images=images_pil_list,
+                                        not_extract_list=not_extract_list,
+                                        image_analysis=effective_image_analysis,
+                                    )
+                            finally:
+                                _stop_stage_interpolation(vlm_stop, vlm_thread)
+                            # Report progress: VLM extraction done
+                            if progress_callback is not None:
+                                _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                                virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                                virtual_pages = min(virtual_pages, page_count)
+                                percent, current_page = _compute_progress_values(
+                                    virtual_pages, page_count, max_percent_seen
                                 )
+                                progress_callback(percent, current_page, page_count, "vlm_extract")
                             window_model_list = _process_ocr_and_formulas(
                                 images_pil_list,
                                 window_model_list,
@@ -1032,6 +1297,15 @@ def doc_analyze(
                                 images_layout_res=images_layout_res,
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
+                        # Report progress: OCR/formula done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "ocr_formula")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["ocr_formula"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
+                            )
+                            progress_callback(percent, current_page, page_count, "ocr_formula")
                     else:
                         raise ValueError(f"Unsupported hybrid effort: {effort}")
 
@@ -1062,8 +1336,15 @@ def doc_analyze(
                     # Report progress to callback
                     if progress_callback is not None:
                         pages_processed = int(progress_bar.n) if hasattr(progress_bar, "n") else len(model_list)
-                        percent = int((pages_processed / page_count) * 100) if page_count > 0 else 0
-                        progress_callback(percent, pages_processed, page_count, "text_recognition")
+                        percent, current_page = _compute_progress_values(
+                            pages_processed, page_count, max_percent_seen
+                        )
+                        _update_stage_timing(stage_starts, stage_durations, "text_recognition")
+                        progress_callback(percent, current_page, page_count, "text_recognition")
+                        # Update adaptive ratios for next window based on measured durations
+                        stage_cum_ratios, stage_indiv_ratios = _compute_adaptive_ratios(
+                            stage_durations, _DEFAULT_CUM_RATIOS, _DEFAULT_INDIV_RATIOS
+                        )
                     last_append_end_time = time.time()
                 finally:
                     _close_images(images_list)
@@ -1114,7 +1395,7 @@ async def aio_doc_analyze(
     progress_callback=None,
     **kwargs,
 ):
-    logger.info(f"[PROGRESS DEBUG] aio_doc_analyze called, progress_callback={progress_callback}")
+    # progress_callback is passed through to stage-level progress reporting
     effort = _validate_parse_effort(effort)
     effective_image_analysis = _resolve_effective_image_analysis(effort, image_analysis)
     client_side_output_generation = bool(
@@ -1151,6 +1432,13 @@ async def aio_doc_analyze(
 
         batch_ratio = get_batch_ratio(device) if not _ocr_enable else 1
 
+        # Progress tracking state across windows
+        max_percent_seen = [0]
+        stage_durations: dict[str, list[float]] = {}
+        stage_starts: dict[str, float] = {}
+        stage_cum_ratios = dict(_DEFAULT_CUM_RATIOS)
+        stage_indiv_ratios = dict(_DEFAULT_INDIV_RATIOS)
+
         infer_start = time.time()
         progress_bar = None
         last_append_end_time = None
@@ -1166,10 +1454,12 @@ async def aio_doc_analyze(
                 try:
                     images_pil_list = [image_dict["img_pil"] for image_dict in images_list]
                     page_sizes = [_normalize_page_size(image) for image in images_pil_list]
+                    pages_in_window = len(images_pil_list)
+                    base_processed = window_start
                     logger.info(
                         f'Hybrid processing window {window_index + 1}/{total_windows}: '
                         f'pages {window_start + 1}-{window_end + 1}/{page_count} '
-                        f'({len(images_pil_list)} pages)'
+                        f'({pages_in_window} pages)'
                     )
                     images_layout_res, hybrid_pipeline_model = await asyncio.to_thread(
                         _predict_layout_for_window,
@@ -1178,6 +1468,16 @@ async def aio_doc_analyze(
                         batch_ratio,
                         _ocr_enable,
                     )
+                    # Report progress: layout stage done (fast batch call, report directly)
+                    if progress_callback is not None:
+                        stage_starts["layout"] = time.time()
+                        virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["layout"])
+                        virtual_pages = min(virtual_pages, page_count)
+                        percent, current_page = _compute_progress_values(
+                            virtual_pages, page_count, max_percent_seen
+                        )
+                        _update_stage_timing(stage_starts, stage_durations, "layout")
+                        progress_callback(percent, current_page, page_count, "layout")
                     if effort == "medium":
                         await asyncio.to_thread(
                             _apply_medium_table_orientation_labels,
@@ -1194,13 +1494,31 @@ async def aio_doc_analyze(
                             )
                             for page_layout_res, pil_img in zip(images_layout_res, images_pil_list)
                         ]
-                        async with aio_predictor_execution_guard(predictor):
-                            window_model_list = await predictor.aio_batch_extract_with_layout(
-                                images_pil_list,
-                                vlm_blocks_list,
-                                not_extract_list=None if _ocr_enable else not_extract_list,
-                                image_analysis=effective_image_analysis,
+                        vlm_stop, vlm_thread = _launch_stage_interpolation(
+                            progress_callback, "vlm_extract", stage_starts,
+                            stage_durations, base_processed,
+                            int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                            page_count, max_percent_seen,
+                        )
+                        try:
+                            async with aio_predictor_execution_guard(predictor):
+                                window_model_list = await predictor.aio_batch_extract_with_layout(
+                                    images_pil_list,
+                                    vlm_blocks_list,
+                                    not_extract_list=None if _ocr_enable else not_extract_list,
+                                    image_analysis=effective_image_analysis,
+                                )
+                        finally:
+                            _stop_stage_interpolation(vlm_stop, vlm_thread)
+                        # Report progress: VLM extraction done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
                             )
+                            progress_callback(percent, current_page, page_count, "vlm_extract")
                         optimize_hybrid_formula_number_blocks(window_model_list)
                         if _ocr_enable:
                             await asyncio.to_thread(
@@ -1221,13 +1539,40 @@ async def aio_doc_analyze(
                                 images_layout_res=images_layout_res,
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
+                        # Report progress: OCR/formula done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "ocr_formula")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["ocr_formula"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
+                            )
+                            progress_callback(percent, current_page, page_count, "ocr_formula")
                     elif effort == "high":
                         if _ocr_enable:
-                            async with aio_predictor_execution_guard(predictor):
-                                window_model_list = await predictor.aio_batch_two_step_extract(
-                                    images=images_pil_list,
-                                    image_analysis=effective_image_analysis,
+                            vlm_stop, vlm_thread = _launch_stage_interpolation(
+                                progress_callback, "vlm_extract", stage_starts,
+                                stage_durations, base_processed,
+                                int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                                page_count, max_percent_seen,
+                            )
+                            try:
+                                async with aio_predictor_execution_guard(predictor):
+                                    window_model_list = await predictor.aio_batch_two_step_extract(
+                                        images=images_pil_list,
+                                        image_analysis=effective_image_analysis,
+                                    )
+                            finally:
+                                _stop_stage_interpolation(vlm_stop, vlm_thread)
+                            # Report progress: VLM extraction done
+                            if progress_callback is not None:
+                                _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                                virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                                virtual_pages = min(virtual_pages, page_count)
+                                percent, current_page = _compute_progress_values(
+                                    virtual_pages, page_count, max_percent_seen
                                 )
+                                progress_callback(percent, current_page, page_count, "vlm_extract")
                             await asyncio.to_thread(
                                 _apply_vlm_ocr_det_sidecars_for_window,
                                 images_pil_list,
@@ -1237,12 +1582,30 @@ async def aio_doc_analyze(
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
                         else:
-                            async with aio_predictor_execution_guard(predictor):
-                                window_model_list = await predictor.aio_batch_two_step_extract(
-                                    images=images_pil_list,
-                                    not_extract_list=not_extract_list,
-                                    image_analysis=effective_image_analysis,
+                            vlm_stop, vlm_thread = _launch_stage_interpolation(
+                                progress_callback, "vlm_extract", stage_starts,
+                                stage_durations, base_processed,
+                                int(pages_in_window * stage_indiv_ratios["vlm_extract"]),
+                                page_count, max_percent_seen,
+                            )
+                            try:
+                                async with aio_predictor_execution_guard(predictor):
+                                    window_model_list = await predictor.aio_batch_two_step_extract(
+                                        images=images_pil_list,
+                                        not_extract_list=not_extract_list,
+                                        image_analysis=effective_image_analysis,
+                                    )
+                            finally:
+                                _stop_stage_interpolation(vlm_stop, vlm_thread)
+                            # Report progress: VLM extraction done
+                            if progress_callback is not None:
+                                _update_stage_timing(stage_starts, stage_durations, "vlm_extract")
+                                virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["vlm_extract"])
+                                virtual_pages = min(virtual_pages, page_count)
+                                percent, current_page = _compute_progress_values(
+                                    virtual_pages, page_count, max_percent_seen
                                 )
+                                progress_callback(percent, current_page, page_count, "vlm_extract")
                             window_model_list = await asyncio.to_thread(
                                 _process_ocr_and_formulas,
                                 images_pil_list,
@@ -1252,6 +1615,15 @@ async def aio_doc_analyze(
                                 images_layout_res=images_layout_res,
                                 hybrid_pipeline_model=hybrid_pipeline_model,
                             )
+                        # Report progress: OCR/formula done
+                        if progress_callback is not None:
+                            _update_stage_timing(stage_starts, stage_durations, "ocr_formula")
+                            virtual_pages = base_processed + int(pages_in_window * stage_cum_ratios["ocr_formula"])
+                            virtual_pages = min(virtual_pages, page_count)
+                            percent, current_page = _compute_progress_values(
+                                virtual_pages, page_count, max_percent_seen
+                            )
+                            progress_callback(percent, current_page, page_count, "ocr_formula")
                     else:
                         raise ValueError(f"Unsupported hybrid effort: {effort}")
 
@@ -1280,12 +1652,18 @@ async def aio_doc_analyze(
                         _ocr_enable=_ocr_enable,
                         progress_bar=progress_bar,
                     )
-                    # Report progress to callback (async path)
+                    # Report progress to callback (real per-page with monotonicity)
                     if progress_callback is not None:
                         pages_processed = int(progress_bar.n) if hasattr(progress_bar, "n") else len(model_list)
-                        percent = int((pages_processed / page_count) * 100) if page_count > 0 else 0
-                        logger.info(f"[PROGRESS CALLBACK] percent={percent}, page={pages_processed}/{page_count}, stage=text_recognition")
-                        progress_callback(percent, pages_processed, page_count, "text_recognition")
+                        percent, current_page = _compute_progress_values(
+                            pages_processed, page_count, max_percent_seen
+                        )
+                        _update_stage_timing(stage_starts, stage_durations, "text_recognition")
+                        progress_callback(percent, current_page, page_count, "text_recognition")
+                        # Update adaptive ratios for next window
+                        stage_cum_ratios, stage_indiv_ratios = _compute_adaptive_ratios(
+                            stage_durations, _DEFAULT_CUM_RATIOS, _DEFAULT_INDIV_RATIOS
+                        )
                     last_append_end_time = time.time()
                 finally:
                     _close_images(images_list)
