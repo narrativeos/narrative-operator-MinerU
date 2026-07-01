@@ -2205,9 +2205,8 @@ def main(ctx,
                     zip_filename = f"{filename}_queue_{task_id}.zip"
                     zip_path = output_dir / zip_filename
                     zip_path.write_bytes(zip_data)
-                    status_html = render_status_steps_html(
-                        f"Downloaded: {zip_filename}", i18n, locale=request_locale)
-                    return (refresh_queue_panel_sync(), status_html,
+                    # Do not update status_panel to avoid clearing previously loaded content
+                    return (refresh_queue_panel_sync(), gr.skip(),
                             str(zip_path), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
                 elif action == "load":
                     # Load the result into the main UI (same as queue_load_result_handler)
