@@ -67,6 +67,7 @@ from mineru.cli.queue_client import (
     queue_clear_all,
     queue_stats,
     get_queue_service_url,
+    get_local_fastapi_url,
     init_embedded_queue,
 )
 
@@ -2035,15 +2036,26 @@ def main(ctx,
             async with httpx.AsyncClient(timeout=10.0) as c:
                 tasks = await queue_list_tasks(c) or []
                 stats = await queue_stats(c) or {}
+                logger.debug(f"Queue refresh: found {len(tasks)} tasks")
                 return render_queue_panel_html(tasks, stats, i18n, flat=True)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Queue refresh failed: {e}")
             return render_queue_panel_html([], {}, i18n, flat=True)
 
     def refresh_queue_panel_sync() -> str:
-        """Synchronous wrapper for refresh_queue_panel (used in non-async contexts)."""
+        """Synchronous wrapper for refresh_queue_panel (used in non-async contexts).
+        Always runs in a separate thread with its own event loop via asyncio.run().
+        """
+        import concurrent.futures
         try:
-            return asyncio.run(_refresh_queue_panel_http())
-        except Exception:
+            future = concurrent.futures.ThreadPoolExecutor(max_workers=1).submit(
+                lambda: asyncio.run(_refresh_queue_panel_http())
+            )
+            result = future.result(timeout=10)
+            logger.debug(f"Queue refresh sync completed")
+            return result
+        except Exception as e:
+            logger.warning(f"Queue refresh sync failed: {e}")
             return render_queue_panel_html([], {}, i18n, flat=True)
 
     async def convert_direct(
@@ -2287,9 +2299,11 @@ def main(ctx,
         request_locale = resolve_request_locale(request)
 
         if not is_queue_enabled() or file_path is None:
+            # Check if either remote queue service or local FastAPI is available
             queue_url = get_queue_service_url()
-            if not queue_url:
-                error_msg = "Queue service URL not set (MINERU_QUEUE_SERVICE_URL)"
+            local_url = get_local_fastapi_url()
+            if not queue_url and not local_url:
+                error_msg = "No queue service available (set MINERU_QUEUE_SERVICE_URL or use local FastAPI)"
             else:
                 error_msg = "Queue service is not available"
             status_html = render_status_steps_html(
@@ -2322,7 +2336,14 @@ def main(ctx,
                     end_page_id=end_pages - 1,
                 )
             if not result:
-                error_msg = f"Queue submit failed (service at {get_queue_service_url()} may not be running)"
+                queue_url = get_queue_service_url()
+                local_url = get_local_fastapi_url()
+                if queue_url:
+                    error_msg = f"Queue submit failed (service at {queue_url} may not be running)"
+                elif local_url:
+                    error_msg = f"Queue submit failed (local FastAPI at {local_url} may not be running)"
+                else:
+                    error_msg = "Queue submit failed (no service available)"
                 status_html = render_status_steps_html(
                     f"Failed: {error_msg}",
                     i18n,
@@ -2335,14 +2356,9 @@ def main(ctx,
                 return
 
             task_id = result.get("task_id", "")
-            status_html = render_status_steps_html(
-                f"{STATUS_SUBMITTING_TASK}\n{STATUS_QUEUED_ON_SERVER}\nTask queued: {task_id}",
-                i18n,
-                locale=request_locale,
-            )
-            # Return immediately after submitting, queue panel will auto-refresh
+            # Queue mode: do not update the "latest status" panel, only refresh the bottom queue panel
             yield (
-                status_html, gr.skip(), gr.skip(), gr.skip(),
+                gr.skip(), gr.skip(), gr.skip(), gr.skip(),
                 gr.skip(), gr.skip(), refresh_queue_panel_sync(),
             )
 
@@ -2468,7 +2484,7 @@ def main(ctx,
         if is_queue_enabled():
             with gr.Row(elem_classes=["mineru-queue-bottom-row"], visible=True):
                 queue_panel = gr.HTML(
-                    value=render_queue_panel_html([], {}, i18n),
+                    value=refresh_queue_panel_sync(),
                     elem_classes=["mineru-queue-panel"],
                 )
             # Hidden textbox to receive queue action messages from JS (must be visible=True to be in DOM)
