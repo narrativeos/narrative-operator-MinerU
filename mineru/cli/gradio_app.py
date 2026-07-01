@@ -1522,6 +1522,31 @@ def safe_stem(file_path):
     return re.sub(r'[^\w.]', '_', stem)
 
 
+def find_parse_dir_in_extracted(extract_root: str | Path, file_name: str) -> str | None:
+    """Find the actual parse output directory by scanning the extracted ZIP structure.
+    
+    The ZIP structure is: extract_root/file_name/{parse_method_or_effort}/
+    This avoids hardcoding backend/parse_method which may not match the actual task.
+    Falls back to resolve_parse_dir with common backends if scanning fails.
+    """
+    file_dir = Path(extract_root) / file_name
+    if not file_dir.is_dir():
+        return None
+    # Look for subdirectories that contain the .md file
+    for sub_dir in sorted(file_dir.iterdir()):
+        if sub_dir.is_dir() and (sub_dir / f"{file_name}.md").is_file():
+            return str(sub_dir)
+    # Fallback: try resolve_parse_dir with the task's likely backend
+    for backend, method in [("pipeline", "auto"), ("hybrid", "auto")]:
+        try:
+            candidate = resolve_parse_dir(extract_root, file_name, backend, method, allow_office_fallback=True)
+            if Path(candidate).is_dir() and (Path(candidate) / f"{file_name}.md").is_file():
+                return candidate
+        except ValueError:
+            continue
+    return None
+
+
 def to_pdf(file_path):
 
     if file_path is None:
@@ -2139,7 +2164,9 @@ def main(ctx,
             # Get file_name from either "filename" (list endpoint) or "file_names" (single task endpoint)
             file_names = task.get("file_names") or [task.get("filename", "")]
             file_name = Path(file_names[0]).stem if file_names[0] else ""
-            local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
+            local_md_dir = find_parse_dir_in_extracted(str(extract_root), file_name)
+            if not local_md_dir:
+                local_md_dir = resolve_parse_dir(str(extract_root), file_name, "pipeline", "auto", allow_office_fallback=True)
             md_path = Path(local_md_dir) / f"{file_name}.md"
             if md_path.is_file():
                 txt_content = md_path.read_text(encoding="utf-8")
@@ -2239,7 +2266,9 @@ def main(ctx,
                     # Get file_name from either "filename" (list endpoint) or "file_names" (single task endpoint)
                     file_names = task.get("file_names") or [task.get("filename", "")]
                     file_name = Path(file_names[0]).stem if file_names[0] else ""
-                    local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
+                    local_md_dir = find_parse_dir_in_extracted(str(extract_root), file_name)
+                    if not local_md_dir:
+                        local_md_dir = resolve_parse_dir(str(extract_root), file_name, "pipeline", "auto", allow_office_fallback=True)
                     md_path = Path(local_md_dir) / f"{file_name}.md"
                     if md_path.is_file():
                         txt_content = md_path.read_text(encoding="utf-8")
