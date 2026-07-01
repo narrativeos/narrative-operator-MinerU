@@ -2136,7 +2136,9 @@ def main(ctx,
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
-            file_name = task.get("filename", "").rsplit(".", 1)[0]
+            # Get file_name from either "filename" (list endpoint) or "file_names" (single task endpoint)
+            file_names = task.get("file_names") or [task.get("filename", "")]
+            file_name = Path(file_names[0]).stem if file_names[0] else ""
             local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
             md_path = Path(local_md_dir) / f"{file_name}.md"
             if md_path.is_file():
@@ -2199,7 +2201,8 @@ def main(ctx,
                         return (refresh_queue_panel_sync(), status_html,
                                 gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
                     # Save zip to output/gradio directory (in allowed_paths) so Gradio can serve it
-                    filename = task.get("filename", "").rsplit(".", 1)[0]
+                    file_names = task.get("file_names") or [task.get("filename", "")]
+                    filename = Path(file_names[0]).stem if file_names[0] else ""
                     output_dir = Path("./output/gradio")
                     output_dir.mkdir(parents=True, exist_ok=True)
                     zip_filename = f"{filename}_queue_{task_id}.zip"
@@ -2233,7 +2236,9 @@ def main(ctx,
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
 
-                    file_name = task.get("filename", "").rsplit(".", 1)[0]
+                    # Get file_name from either "filename" (list endpoint) or "file_names" (single task endpoint)
+                    file_names = task.get("file_names") or [task.get("filename", "")]
+                    file_name = Path(file_names[0]).stem if file_names[0] else ""
                     local_md_dir = resolve_parse_dir(extract_root, file_name, "pipeline", "auto", allow_office_fallback=True)
                     md_path = Path(local_md_dir) / f"{file_name}.md"
                     if md_path.is_file():
