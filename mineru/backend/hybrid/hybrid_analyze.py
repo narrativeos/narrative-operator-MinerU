@@ -1114,6 +1114,7 @@ async def aio_doc_analyze(
     progress_callback=None,
     **kwargs,
 ):
+    logger.info(f"[PROGRESS DEBUG] aio_doc_analyze called, progress_callback={progress_callback}")
     effort = _validate_parse_effort(effort)
     effective_image_analysis = _resolve_effective_image_analysis(effort, image_analysis)
     client_side_output_generation = bool(
@@ -1279,6 +1280,12 @@ async def aio_doc_analyze(
                         _ocr_enable=_ocr_enable,
                         progress_bar=progress_bar,
                     )
+                    # Report progress to callback (async path)
+                    if progress_callback is not None:
+                        pages_processed = int(progress_bar.n) if hasattr(progress_bar, "n") else len(model_list)
+                        percent = int((pages_processed / page_count) * 100) if page_count > 0 else 0
+                        logger.info(f"[PROGRESS CALLBACK] percent={percent}, page={pages_processed}/{page_count}, stage=text_recognition")
+                        progress_callback(percent, pages_processed, page_count, "text_recognition")
                     last_append_end_time = time.time()
                 finally:
                     _close_images(images_list)
