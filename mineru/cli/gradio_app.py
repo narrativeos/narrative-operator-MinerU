@@ -475,7 +475,7 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None, flat=False):
     # Build stats HTML
     pending = stats.get("pending", 0) if stats else 0
     processing = stats.get("processing", 0) if stats else 0
-    done = stats.get("done", 0) if stats else 0
+    done = stats.get("done", stats.get("completed", 0)) if stats else 0
     failed = stats.get("failed", 0) if stats else 0
     
     stats_html = (
@@ -554,7 +554,7 @@ def render_queue_panel_html(tasks, stats, i18n, locale=None, flat=False):
         
         # Action buttons
         actions = ""
-        if status == "done":
+        if status == "completed":
             actions = (
                 f'<button class="mineru-queue-action" data-action="download" data-task-id="{task_id}">'
                 f'{render_client_i18n_text(i18n, "queue_action_download", locale)}</button>'
@@ -2109,7 +2109,7 @@ def main(ctx,
         try:
             async with httpx.AsyncClient(timeout=120.0) as c:
                 task = await queue_get_task(c, task_id)
-            if not task or task.get("status") != "done":
+            if not task or task.get("status") != "completed":
                 yield (
                     render_status_steps_html(f"Failed: task {task_id} not ready", i18n, locale=request_locale),
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
@@ -2187,7 +2187,7 @@ def main(ctx,
                 elif action == "download":
                     # Download the result zip and return it as a downloadable file
                     task = await queue_get_task(c, task_id)
-                    if not task or task.get("status") != "done":
+                    if not task or task.get("status") != "completed":
                         status_html = render_status_steps_html(
                             f"Failed: task {task_id} not ready", i18n, locale=request_locale)
                         return (refresh_queue_panel_sync(), status_html,
@@ -2211,7 +2211,7 @@ def main(ctx,
                 elif action == "load":
                     # Load the result into the main UI (same as queue_load_result_handler)
                     task = await queue_get_task(c, task_id)
-                    if not task or task.get("status") != "done":
+                    if not task or task.get("status") != "completed":
                         status_html = render_status_steps_html(
                             f"Failed: task {task_id} not ready", i18n, locale=request_locale)
                         return (refresh_queue_panel_sync(), status_html,
