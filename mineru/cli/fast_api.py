@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager, suppress
@@ -57,6 +58,11 @@ from mineru.cli.api_protocol import (
     DEFAULT_PROCESSING_WINDOW_SIZE,
 )
 from mineru.cli.backend_options import DEFAULT_HYBRID_EFFORT
+from mineru.cli.sqlite_queue import (
+    SQLiteQueueManager,
+    SQLiteQueueTask,
+    queue_manager as sqlite_queue_manager,
+)
 from mineru.cli.vlm_preload import (
     maybe_preload_vlm_model,
     split_service_and_model_config,
@@ -943,11 +949,15 @@ class AsyncTaskManager:
         self.task_cleanup_interval_seconds = get_task_cleanup_interval_seconds()
         self.manager_wakeup = asyncio.Event()
         self._next_submit_order = 1
+        # SQLite persistence
+        self._sqlite = sqlite_queue_manager
 
     async def start(self) -> None:
         self.is_shutting_down = False
         self.last_worker_error = None
         self.manager_wakeup = asyncio.Event()
+        # Restore tasks from SQLite that are still in progress
+        self._restore_pending_tasks()
         if self.dispatcher_task is None or self.dispatcher_task.done():
             self.dispatcher_task = asyncio.create_task(
                 self._dispatcher_loop(), name="mineru-fastapi-task-dispatcher"
@@ -959,6 +969,25 @@ class AsyncTaskManager:
             self.cleanup_task = asyncio.create_task(
                 self._cleanup_loop(), name="mineru-fastapi-task-cleanup"
             )
+
+    def _restore_pending_tasks(self) -> None:
+        """Restore processing tasks from SQLite after restart."""
+        all_tasks = self._sqlite.get_all_tasks()
+        for sqlite_task in all_tasks:
+            if sqlite_task.status == "processing":
+                # Task was being processed when server restarted, put it back to waiting
+                self._sqlite.fail_task(sqlite_task, "Server restarted during processing")
+                # Re-queue it
+                sqlite_task.status = "waiting"
+                sqlite_task.started_at = None
+                sqlite_task.error = None
+                self._sqlite._save_task(sqlite_task)
+                # Also add to in-memory
+                task = self._sqlite_task_to_async_task(sqlite_task)
+                if task:
+                    self.tasks[task.task_id] = task
+                    self.task_events[task.task_id] = asyncio.Event()
+                    asyncio.create_task(self.queue.put(task.task_id))
 
     async def shutdown(self) -> None:
         self.is_shutting_down = True
@@ -987,9 +1016,26 @@ class AsyncTaskManager:
         self.tasks[task.task_id] = task
         self.task_events[task.task_id] = asyncio.Event()
         await self.queue.put(task.task_id)
+        # Persist to SQLite
+        self._persist_task(task)
 
     def get(self, task_id: str) -> Optional[AsyncParseTask]:
-        return self.tasks.get(task_id)
+        task = self.tasks.get(task_id)
+        if task is not None:
+            return task
+        # Try to get from SQLite
+        sqlite_task = self._sqlite.get_task(task_id)
+        if sqlite_task is not None:
+            task = self._sqlite_task_to_async_task(sqlite_task)
+            if task is not None:
+                self.tasks[task.task_id] = task
+                self.task_events[task.task_id] = asyncio.Event()
+                return task
+        return None
+
+    def get_all_tasks(self) -> list[SQLiteQueueTask]:
+        """Get all tasks from SQLite queue (for Gradio queue panel)."""
+        return self._sqlite.get_all_tasks()
 
     def get_queued_ahead(self, task_id: str) -> int | None:
         task = self.tasks.get(task_id)
@@ -1138,6 +1184,95 @@ class AsyncTaskManager:
             logger.error(f"Async task processor crashed: {exception}")
             self.last_worker_error = str(exception)
 
+    def _persist_task(self, task: AsyncParseTask) -> None:
+        """Persist an AsyncParseTask to SQLite."""
+        sqlite_task = SQLiteQueueTask(
+            task_id=task.task_id,
+            filename=task.file_names[0] if task.file_names else "unknown",
+            file_size=0,
+            status=task.status,
+            backend=task.backend,
+            parse_method=task.parse_method,
+            lang_list=task.lang_list,
+            formula_enable=task.formula_enable,
+            table_enable=task.table_enable,
+            image_analysis=task.image_analysis,
+            effort=task.effort,
+            start_page_id=task.start_page_id,
+            end_page_id=task.end_page_id,
+            created_at=time.time(),
+            started_at=None,
+            completed_at=None,
+            error=task.error,
+            result_dir=task.output_dir,
+            queue_order=task.submit_order,
+            file_names=task.file_names,
+            output_dir=task.output_dir,
+            return_md=task.return_md,
+            return_middle_json=task.return_middle_json,
+            return_model_output=task.return_model_output,
+            return_content_list=task.return_content_list,
+            return_images=task.return_images,
+            response_format_zip=task.response_format_zip,
+            return_original_file=task.return_original_file,
+            client_side_output_generation=task.client_side_output_generation,
+            server_url=task.server_url,
+            upload_names=task.upload_names,
+            uploads=task.uploads,
+            submit_order=task.submit_order,
+        )
+        self._sqlite._save_task(sqlite_task)
+
+    def _sqlite_task_to_async_task(self, sqlite_task: SQLiteQueueTask) -> Optional[AsyncParseTask]:
+        """Convert a SQLiteQueueTask to AsyncParseTask."""
+        # Convert timestamps
+        created_at = None
+        if sqlite_task.created_at:
+            created_at = datetime.fromtimestamp(sqlite_task.created_at).isoformat()
+        started_at = None
+        if sqlite_task.started_at:
+            started_at = datetime.fromtimestamp(sqlite_task.started_at).isoformat()
+        completed_at = None
+        if sqlite_task.completed_at:
+            completed_at = datetime.fromtimestamp(sqlite_task.completed_at).isoformat()
+
+        # Map status from sqlite (waiting/processing/completed/failed) to FastAPI (pending/processing/completed/failed)
+        status = sqlite_task.status
+        if status == "waiting":
+            status = TASK_PENDING
+
+        return AsyncParseTask(
+            task_id=sqlite_task.task_id,
+            status=status,
+            backend=sqlite_task.backend,
+            file_names=sqlite_task.file_names or [],
+            created_at=created_at or utc_now_iso(),
+            output_dir=sqlite_task.output_dir or "",
+            effort=sqlite_task.effort,
+            parse_method=sqlite_task.parse_method,
+            lang_list=sqlite_task.lang_list or [],
+            formula_enable=sqlite_task.formula_enable,
+            table_enable=sqlite_task.table_enable,
+            image_analysis=sqlite_task.image_analysis,
+            server_url=sqlite_task.server_url,
+            return_md=sqlite_task.return_md,
+            return_middle_json=sqlite_task.return_middle_json,
+            return_model_output=sqlite_task.return_model_output,
+            return_content_list=sqlite_task.return_content_list,
+            return_images=sqlite_task.return_images,
+            response_format_zip=sqlite_task.response_format_zip,
+            return_original_file=sqlite_task.return_original_file,
+            client_side_output_generation=sqlite_task.client_side_output_generation,
+            start_page_id=sqlite_task.start_page_id,
+            end_page_id=sqlite_task.end_page_id,
+            upload_names=sqlite_task.upload_names or [],
+            uploads=sqlite_task.uploads or [],
+            submit_order=sqlite_task.submit_order,
+            started_at=started_at,
+            completed_at=completed_at,
+            error=sqlite_task.error,
+        )
+
     async def _process_task(self, task_id: str) -> None:
         task = self.tasks.get(task_id)
         if task is None:
@@ -1162,6 +1297,7 @@ class AsyncTaskManager:
         task.status = TASK_PROCESSING
         task.started_at = utc_now_iso()
         task.error = None
+        self._persist_task(task)
 
         uploads = [
             StoredUpload(
@@ -1184,6 +1320,7 @@ class AsyncTaskManager:
         )
         task.status = TASK_COMPLETED
         task.completed_at = utc_now_iso()
+        self._persist_task(task)
         self._signal_task_event(task.task_id)
 
     def cleanup_expired_tasks(self) -> int:
@@ -1298,6 +1435,35 @@ async def submit_parse_task(
     return build_task_submission_response(task, http_request, task_manager)
 
 
+@app.get(path="/tasks", name="list_async_tasks")
+async def list_async_tasks():
+    """List all tasks from the SQLite queue (for Gradio queue panel)."""
+    task_manager = getattr(app.state, "task_manager", None)
+    if task_manager is None:
+        return []
+    tasks = task_manager.get_all_tasks()
+    result = []
+    # Map SQLite statuses to Gradio-expected statuses
+    status_map = {
+        "waiting": "waiting",
+        "processing": "processing",
+        "completed": "done",
+        "failed": "failed",
+        "cancelled": "cancelled",
+    }
+    for task in tasks:
+        d = task.to_dict()
+        # Map status for Gradio compatibility
+        d["status"] = status_map.get(task.status, task.status)
+        # Calculate queue_position for waiting tasks
+        if task.status == "waiting":
+            d["queue_position"] = task.queue_order
+        else:
+            d["queue_position"] = None
+        result.append(d)
+    return result
+
+
 @app.get(path="/tasks/{task_id}", name="get_async_task_status")
 async def get_async_task_status(task_id: str, request: Request):
     task_manager = get_task_manager()
@@ -1395,6 +1561,45 @@ async def health_check():
         "task_retention_seconds": task_manager.task_retention_seconds,
         "task_cleanup_interval_seconds": task_manager.task_cleanup_interval_seconds,
     }
+
+
+@app.post(path="/tasks/clear", name="clear_all_tasks")
+async def clear_all_tasks():
+    """Clear all tasks from the SQLite queue."""
+    task_manager = getattr(app.state, "task_manager", None)
+    if task_manager is None:
+        return {"success": False, "message": "Task manager not initialized"}
+    count = task_manager._sqlite.clear_all_tasks()
+    return {"success": True, "count": count}
+
+
+@app.post(path="/tasks/{task_id}/cancel", name="cancel_task")
+async def cancel_task(task_id: str):
+    """Cancel a waiting task."""
+    task_manager = getattr(app.state, "task_manager", None)
+    if task_manager is None:
+        return {"success": False, "message": "Task manager not initialized"}
+    success = task_manager._sqlite.cancel_task(task_id)
+    return {"success": success, "task_id": task_id}
+
+
+@app.delete(path="/tasks/{task_id}", name="delete_task")
+async def delete_task(task_id: str):
+    """Delete a task from the queue."""
+    task_manager = getattr(app.state, "task_manager", None)
+    if task_manager is None:
+        return {"success": False, "message": "Task manager not initialized"}
+    success = task_manager._sqlite.delete_task(task_id)
+    return {"success": success, "task_id": task_id}
+
+
+@app.get(path="/tasks/stats", name="queue_stats")
+async def queue_stats():
+    """Get queue statistics."""
+    task_manager = getattr(app.state, "task_manager", None)
+    if task_manager is None:
+        return {"pending": 0, "processing": 0, "done": 0, "failed": 0}
+    return task_manager._sqlite.get_stats()
 
 
 @click.command(
