@@ -2172,7 +2172,7 @@ def main(ctx,
     async def queue_action_handler(action: str, task_id: str, request: gr.Request = None):
         """Handle queue actions (cancel, delete, clear_all, download, load) triggered from JS."""
         request_locale = resolve_request_locale(request)
-        default_outputs = (refresh_queue_panel_sync(), render_status_steps_html("", i18n, locale=request_locale),
+        default_outputs = (refresh_queue_panel_sync(), gr.skip(),
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
         if not is_queue_enabled():
             return default_outputs
@@ -2249,9 +2249,10 @@ def main(ctx,
                         i18n,
                         locale=request_locale,
                     )
+                    # Do not update status_panel to avoid clearing previously loaded content
                     return (
                         refresh_queue_panel_sync(),
-                        status_html,
+                        gr.skip(),
                         None,  # output_file
                         prepare_markdown_for_gradio_preview(md_content, latex_delimiters),
                         txt_content,
@@ -2263,7 +2264,7 @@ def main(ctx,
             status_html = render_status_steps_html(f"Failed: {e}", i18n, locale=request_locale)
             return (refresh_queue_panel_sync(), status_html,
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
-        return (refresh_queue_panel_sync(), render_status_steps_html("", i18n, locale=request_locale),
+        return (refresh_queue_panel_sync(), gr.skip(),
                 gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
 
     def _handle_queue_action_from_js(action_msg, i18n_local, request: gr.Request = None):
@@ -2271,14 +2272,14 @@ def main(ctx,
         Expects format: "action:task_id" e.g. "clear_all:" or "cancel:abc123"
         """
         if not action_msg or ":" not in action_msg:
-            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n_local),
+            return (refresh_queue_panel_sync(), gr.skip(),
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
         action, task_id = action_msg.split(":", 1)
         try:
             result = asyncio.run(queue_action_handler(action, task_id, request))
             return result
         except Exception:
-            return (refresh_queue_panel_sync(), render_status_steps_html("", i18n_local),
+            return (refresh_queue_panel_sync(), gr.skip(),
                     gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
 
     async def queue_convert_handler(
