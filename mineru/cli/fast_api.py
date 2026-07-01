@@ -1447,7 +1447,7 @@ async def list_async_tasks():
     status_map = {
         "waiting": "waiting",
         "processing": "processing",
-        "completed": "done",
+        "completed": "completed",
         "failed": "failed",
         "cancelled": "cancelled",
     }
