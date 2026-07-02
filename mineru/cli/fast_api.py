@@ -625,6 +625,18 @@ def create_result_zip(
                             path.name,
                         ),
                     )
+
+            # Always include layout PDF if it was generated during parsing
+            layout_pdf_path = os.path.join(parse_dir, f"{pdf_name}_layout.pdf")
+            if os.path.exists(layout_pdf_path):
+                zf.write(
+                    layout_pdf_path,
+                    arcname=build_zip_arcname(
+                        pdf_name,
+                        parse_dir,
+                        f"{pdf_name}_layout.pdf",
+                    ),
+                )
     return zip_path
 
 
@@ -865,7 +877,7 @@ async def run_parse_job(
         table_enable=request_options.table_enable,
         image_analysis=request_options.image_analysis,
         server_url=request_options.server_url,
-        f_draw_layout_bbox=False,
+        f_draw_layout_bbox=True,
         f_draw_span_bbox=False,
         f_dump_md=request_options.return_md,
         f_dump_middle_json=request_options.return_middle_json,

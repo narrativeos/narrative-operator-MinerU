@@ -191,7 +191,7 @@ async def parse_request_form(
                 "ignored unless response_format_zip=true"
             ),
         ),
-    ] = False,
+    ] = True,
     client_side_output_generation: Annotated[
         bool,
         Form(
