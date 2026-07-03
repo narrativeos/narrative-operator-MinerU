@@ -3,7 +3,6 @@ import asyncio
 import os
 import threading
 import time
-from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -124,7 +123,7 @@ def _resolve_effective_image_analysis(effort: str, image_analysis: bool) -> bool
 
 def _vlm_type_for_medium_layout_label(label: str | None) -> str | None:
     """将 pipeline layout 标签映射为 mineru-vl-utils 支持的 VLM 抽取类型。"""
-    return MEDIUM_EFFORT_LAYOUT_LABEL_TO_VLM_TYPE.get(label)
+    return MEDIUM_EFFORT_LAYOUT_LABEL_TO_VLM_TYPE.get(label) if label else None  # type: ignore[literal-required]
 
 
 def _apply_medium_visual_sub_type(block, label: str | None):
@@ -197,7 +196,7 @@ def ocr_det(
                 adjusted_mfdetrec_res = get_adjusted_mfdetrec_res(
                     page_mfd_res, useful_list
                 )
-                bgr_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)
+                bgr_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)  # type: ignore[call-overload]
                 det_image = (
                     mask_formula_regions_for_ocr_det(bgr_image, adjusted_mfdetrec_res)
                     if mask_formula_for_ocr_det
@@ -248,7 +247,7 @@ def ocr_det(
                 adjusted_mfdetrec_res = get_adjusted_mfdetrec_res(
                     page_mfd_res, useful_list
                 )
-                bgr_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)
+                bgr_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)  # type: ignore[call-overload]
                 det_image = (
                     mask_formula_regions_for_ocr_det(bgr_image, adjusted_mfdetrec_res)
                     if mask_formula_for_ocr_det
@@ -381,7 +380,7 @@ def _build_medium_vlm_layout_blocks(layout_dets, page_width, page_height):
             block = ContentBlock(
                 vlm_type,
                 bbox,
-                angle=_normalize_medium_vlm_angle(layout_det.get("angle", 0)),
+                angle=_normalize_medium_vlm_angle(layout_det.get("angle", 0)),  # type: ignore[arg-type]
                 content=layout_det.get("content"),
             )
         except AssertionError as exc:
@@ -1124,6 +1123,13 @@ def doc_analyze(
 
         batch_ratio = get_batch_ratio(device) if not _ocr_enable else 1
 
+        # Progress tracking state across windows
+        max_percent_seen = [0]
+        stage_durations: dict[str, list[float]] = {}
+        stage_starts: dict[str, float] = {}
+        stage_cum_ratios = dict(_DEFAULT_CUM_RATIOS)
+        stage_indiv_ratios = dict(_DEFAULT_INDIV_RATIOS)
+
         infer_start = time.time()
         progress_bar = None
         last_append_end_time = None
@@ -1205,7 +1211,7 @@ def doc_analyze(
                                 virtual_pages, page_count, max_percent_seen
                             )
                             progress_callback(percent, current_page, page_count, "vlm_extract")
-                        optimize_hybrid_formula_number_blocks(window_model_list)
+                        optimize_hybrid_formula_number_blocks(window_model_list)  # type: ignore[arg-type]
                         if _ocr_enable:
                             _apply_vlm_ocr_det_sidecars_for_window(
                                 images_pil_list,
@@ -1519,7 +1525,7 @@ async def aio_doc_analyze(
                                 virtual_pages, page_count, max_percent_seen
                             )
                             progress_callback(percent, current_page, page_count, "vlm_extract")
-                        optimize_hybrid_formula_number_blocks(window_model_list)
+                        optimize_hybrid_formula_number_blocks(window_model_list)  # type: ignore[arg-type]
                         if _ocr_enable:
                             await asyncio.to_thread(
                                 _apply_vlm_ocr_det_sidecars_for_window,

@@ -898,9 +898,9 @@ async def run_parse_job(
     )
 
     if request_options.backend == "pipeline":
-        await asyncio.to_thread(do_parse, **parse_kwargs)
+        await asyncio.to_thread(do_parse, **parse_kwargs)  # type: ignore[misc]
     else:
-        await aio_do_parse(**parse_kwargs)
+        await aio_do_parse(**parse_kwargs)  # type: ignore[misc]
     return response_file_names
 
 
@@ -1445,7 +1445,7 @@ async def parse_pdf(
     ],
 ):
     task = await create_async_parse_task(request_options)
-    request_options = None
+    request_options = None  # type: ignore[assignment]
     task_manager = get_task_manager()
 
     try:

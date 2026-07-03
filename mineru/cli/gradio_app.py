@@ -352,7 +352,7 @@ def build_backend_choices(http_client_enable, i18n):
     """构建后端选项列表，展示文案与提交给后端的 backend 值保持完全一致。"""
     choices = list(BACKEND_CHOICE_DEFINITIONS)
     if http_client_enable:
-        choices.extend(HTTP_CLIENT_BACKEND_CHOICE_DEFINITIONS)
+        choices.extend(HTTP_CLIENT_BACKEND_CHOICE_DEFINITIONS)  # type: ignore[arg-type]
     return choices
 
 
@@ -1445,7 +1445,7 @@ async def stream_to_markdown(
             await asyncio.gather(task, return_exceptions=True)
 
     try:
-        md_content, txt_content, content_list_json, archive_zip_path, preview_pdf_path = await job_task
+        md_content, txt_content, content_list_json, archive_zip_path, preview_pdf_path = await job_task  # type: ignore[misc]
     except Exception as exc:
         status_state.append(format_failed_status(exc))
         yield status_state.render(), None, "", "", "", gr.skip()
@@ -1564,7 +1564,7 @@ def find_parse_dir_in_extracted(extract_root: str | Path, file_name: str) -> str
         try:
             candidate = resolve_parse_dir(extract_root, file_name, backend, method, allow_office_fallback=True)
             if Path(candidate).is_dir() and (Path(candidate) / f"{file_name}.md").is_file():
-                return candidate
+                return str(candidate)  # type: ignore[return-value]
         except ValueError:
             continue
     return None
@@ -2051,10 +2051,10 @@ def main(ctx,
         language="ch",
         backend="pipeline",
         url=None,
-        request: gr.Request = None,
+        request: gr.Request | None = None,  # type: ignore[assignment]
     ):
         request_locale = resolve_request_locale(request)
-        async for update in stream_to_markdown(
+        async for update in stream_to_markdown(  # type: ignore[misc]
             file_path=file_path,
             end_pages=end_pages,
             is_ocr=is_ocr,
@@ -2117,11 +2117,11 @@ def main(ctx,
         language="ch",
         backend="pipeline",
         url=None,
-        request: gr.Request = None,
+        request: gr.Request | None = None,  # type: ignore[assignment]
     ):
         """Direct conversion (non-queue): immediate processing with stream output."""
         request_locale = resolve_request_locale(request)
-        async for update in stream_to_markdown(
+        async for update in stream_to_markdown(  # type: ignore[misc]
             file_path=file_path,
             end_pages=end_pages,
             is_ocr=is_ocr,
@@ -2144,7 +2144,7 @@ def main(ctx,
             )
             yield update
 
-    async def queue_load_result_handler(task_id: str, request: gr.Request = None):
+    async def queue_load_result_handler(task_id: str, request: gr.Request | None = None):  # type: ignore[assignment]
         """Load a completed task's result from the queue service into the main UI."""
         request_locale = resolve_request_locale(request)
         if not is_queue_enabled() or not task_id:
@@ -2180,7 +2180,7 @@ def main(ctx,
                 tmp_path = tmp.name
             extract_root = Path(tempfile.mkdtemp())
             try:
-                _api_client.safe_extract_zip(tmp_path, extract_root)
+                _api_client.safe_extract_zip(str(tmp_path), extract_root)  # type: ignore[arg-type]
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
@@ -2221,7 +2221,7 @@ def main(ctx,
                 refresh_queue_panel_sync(),
             )
 
-    async def queue_action_handler(action: str, task_id: str, request: gr.Request = None):
+    async def queue_action_handler(action: str, task_id: str, request: gr.Request | None = None):  # type: ignore[assignment]
         """Handle queue actions (cancel, delete, clear_all, download, load) triggered from JS."""
         request_locale = resolve_request_locale(request)
         default_outputs = (refresh_queue_panel_sync(), gr.skip(),
@@ -2282,7 +2282,7 @@ def main(ctx,
                         tmp_path = tmp.name
                     extract_root = Path(tempfile.mkdtemp())
                     try:
-                        _api_client.safe_extract_zip(tmp_path, extract_root)
+                        _api_client.safe_extract_zip(str(tmp_path), extract_root)  # type: ignore[arg-type]
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
 
@@ -2324,7 +2324,7 @@ def main(ctx,
         return (refresh_queue_panel_sync(), gr.skip(),
                 gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), "")
 
-    def _handle_queue_action_from_js(action_msg, i18n_local, request: gr.Request = None):
+    def _handle_queue_action_from_js(action_msg, i18n_local, request: gr.Request | None = None):  # type: ignore[assignment]
         """Sync wrapper to handle queue action messages from JS.
         Expects format: "action:task_id" e.g. "clear_all:" or "cancel:abc123"
         """
@@ -2350,7 +2350,7 @@ def main(ctx,
         language="ch",
         backend="pipeline",
         url=None,
-        request: gr.Request = None,
+        request: gr.Request | None = None,  # type: ignore[assignment]
     ):
         """Queue conversion: submit to queue service and return immediately."""
         request_locale = resolve_request_locale(request)
@@ -2432,7 +2432,7 @@ def main(ctx,
 
     suffixes = [f".{suffix}" for suffix in pdf_suffixes + image_suffixes + office_suffixes]
     _blocks_kwargs = {} if IS_GRADIO_6 else {"css": APP_CSS, "js": APP_JS}
-    with gr.Blocks(**_blocks_kwargs) as demo:
+    with gr.Blocks(**_blocks_kwargs) as demo:  # type: ignore[call-overload]
         gr.HTML(render_header_html(i18n), elem_classes=["mineru-header-html"])
         with gr.Row(elem_classes=["mineru-workspace-row"]):
             with gr.Column(variant='panel', scale=2, min_width=280, elem_classes=["mineru-control-column"]):
@@ -2469,7 +2469,7 @@ def main(ctx,
                     )
                 with gr.Row(elem_classes=["mineru-actions"]):
                     change_bu = gr.Button(i18n("convert"), variant="primary", scale=1, min_width=0)
-                    clear_bu = gr.ClearButton(value=i18n("clear"), scale=1, min_width=0)
+                    clear_bu = gr.ClearButton(value=i18n("clear"), scale=1, min_width=0)  # type: ignore[arg-type]
                 # Queue convert button (only visible when queue service is available)
                 with gr.Row(visible=is_queue_enabled(), elem_classes=["mineru-queue-convert-row"]):
                     queue_convert_bu = gr.Button(i18n("queue_convert"), variant="secondary", scale=1, min_width=0)
@@ -2491,7 +2491,7 @@ def main(ctx,
             pdf_preview_page_height = 720
             with gr.Column(variant='panel', scale=4, min_width=340, elem_classes=["mineru-preview-pane"]):
                 doc_show = PDF(
-                    label=_doc_preview_label,
+                    label=_doc_preview_label,  # type: ignore[arg-type]
                     interactive=False,
                     visible=True,
                     height=pdf_preview_page_height,
@@ -2509,12 +2509,12 @@ def main(ctx,
                 with gr.Tabs(elem_classes=["mineru-markdown-tabs"]):
                     with gr.Tab(i18n("md_rendering")):
                         md = gr.Markdown(
-                            label=i18n("md_rendering"),
+                            label=i18n("md_rendering"),  # type: ignore[arg-type]
                             height=preview_content_height,
                             elem_classes=["mineru-markdown-output"],
                             latex_delimiters=latex_delimiters,
                             line_breaks=True,
-                            **_md_copy_kwargs
+                            **_md_copy_kwargs  # type: ignore[arg-type]
                         )
                     with gr.Tab(i18n("md_text")):
                         md_text = gr.Code(

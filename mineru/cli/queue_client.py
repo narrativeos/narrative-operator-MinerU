@@ -115,7 +115,7 @@ async def queue_submit(
     return None
 
 
-async def queue_list_tasks(client: httpx.AsyncClient = None) -> list[dict]:
+async def queue_list_tasks(client: httpx.AsyncClient | None = None) -> list[dict]:
     """Get all tasks from FastAPI."""
     if not client:
         return []
@@ -131,7 +131,7 @@ async def queue_list_tasks(client: httpx.AsyncClient = None) -> list[dict]:
     return []
 
 
-async def queue_get_task(client: httpx.AsyncClient = None, task_id: str = None) -> Optional[dict]:
+async def queue_get_task(client: httpx.AsyncClient | None = None, task_id: str | None = None) -> Optional[dict]:
     """Get a single task from FastAPI."""
     if not client or not task_id:
         return None
@@ -147,7 +147,7 @@ async def queue_get_task(client: httpx.AsyncClient = None, task_id: str = None) 
     return None
 
 
-async def queue_download_result(client: httpx.AsyncClient = None, task_id: str = None) -> Optional[bytes]:
+async def queue_download_result(client: httpx.AsyncClient | None = None, task_id: str | None = None) -> Optional[bytes]:
     """Download the result ZIP from FastAPI."""
     if not client or not task_id:
         return None
@@ -163,7 +163,7 @@ async def queue_download_result(client: httpx.AsyncClient = None, task_id: str =
     return None
 
 
-async def queue_delete_task(client: httpx.AsyncClient = None, task_id: str = None) -> bool:
+async def queue_delete_task(client: httpx.AsyncClient | None = None, task_id: str | None = None) -> bool:
     """Delete a task from FastAPI."""
     if not client or not task_id:
         return False
@@ -179,7 +179,7 @@ async def queue_delete_task(client: httpx.AsyncClient = None, task_id: str = Non
     return False
 
 
-async def queue_cancel_task(client: httpx.AsyncClient = None, task_id: str = None) -> bool:
+async def queue_cancel_task(client: httpx.AsyncClient | None = None, task_id: str | None = None) -> bool:
     """Cancel a waiting task via FastAPI."""
     if not client or not task_id:
         return False
@@ -195,7 +195,7 @@ async def queue_cancel_task(client: httpx.AsyncClient = None, task_id: str = Non
     return False
 
 
-async def queue_clear_all(client: httpx.AsyncClient = None) -> bool:
+async def queue_clear_all(client: httpx.AsyncClient | None = None) -> bool:
     """Clear all tasks via FastAPI."""
     if not client:
         return False
@@ -211,7 +211,7 @@ async def queue_clear_all(client: httpx.AsyncClient = None) -> bool:
     return False
 
 
-async def queue_stats(client: httpx.AsyncClient = None) -> Optional[dict]:
+async def queue_stats(client: httpx.AsyncClient | None = None) -> Optional[dict]:
     """Get queue statistics from FastAPI health endpoint."""
     if not client:
         return None
