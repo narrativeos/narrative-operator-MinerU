@@ -612,6 +612,7 @@ def make_blocks_to_content_list_v2(para_block, img_buket_path, page_size):
                 image_footnote.extend(merge_para_with_text_v2(block))
         para_content = {
             'type': ContentTypeV2.IMAGE,
+            'img_path': image_source['path'],
             'content': {
                 'image_source': image_source,
                 'content': image_content if image_content else '',

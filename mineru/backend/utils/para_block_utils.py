@@ -30,6 +30,35 @@ INTERNAL_BLOCK_METADATA_KEYS = {
 }
 
 
+def add_img_path_to_image_blocks(pdf_info_list, img_buket_path="images"):
+    """为 middle.json 中所有 type == 'image' 的 block 添加顶层 img_path 字段。
+
+    从 image_body 子块的 span 中提取 image_path，加上 img_buket_path 前缀，
+    提升到顶层以便直接访问。与 content_list.json 的 img_path 格式保持一致。
+    同时处理 preproc_blocks 和 para_blocks。
+    """
+    for page_info in pdf_info_list:
+        for block_key in ("preproc_blocks", "para_blocks"):
+            for block in page_info.get(block_key, []):
+                if block.get("type") != BlockType.IMAGE:
+                    continue
+                if "img_path" in block:
+                    continue  # 已存在则跳过
+                for sub_block in block.get("blocks", []):
+                    if sub_block.get("type") != BlockType.IMAGE_BODY:
+                        continue
+                    for line in sub_block.get("lines", []):
+                        for span in line.get("spans", []):
+                            image_path = span.get("image_path", "")
+                            if image_path:
+                                block["img_path"] = f"{img_buket_path}/{image_path}"
+                                break
+                        if "img_path" in block:
+                            break
+                    if "img_path" in block:
+                        break
+
+
 def iter_block_spans(block):
     for line in block.get("lines", []):
         for span in line.get("spans", []):

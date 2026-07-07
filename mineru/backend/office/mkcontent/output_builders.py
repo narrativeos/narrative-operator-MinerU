@@ -594,6 +594,7 @@ def make_blocks_to_content_list_v2(para_block, img_buket_path):
         }
         para_content = {
             'type': ContentTypeV2.IMAGE,
+            'img_path': image_source['path'],
             'content': {
                 'image_source': image_source,
                 'image_caption': _collect_caption_v2(

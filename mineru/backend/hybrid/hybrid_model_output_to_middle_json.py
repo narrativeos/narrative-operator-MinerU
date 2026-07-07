@@ -7,6 +7,7 @@ from tqdm import tqdm
 from mineru.backend.utils.html_image_utils import replace_inline_table_images
 from mineru.backend.utils.para_block_utils import (
     OCR_DET_LINES_KEY,
+    add_img_path_to_image_blocks,
     build_para_blocks_from_preproc,
     cleanup_internal_para_block_metadata,
     iter_block_spans,
@@ -270,6 +271,7 @@ def finalize_middle_json_from_preproc(pdf_info_list, effort="medium"):
     apply_title_leveling_to_pdf_info(pdf_info_list)
     _normalize_split_title_blocks(pdf_info_list)
     cleanup_internal_para_block_metadata(pdf_info_list)
+    add_img_path_to_image_blocks(pdf_info_list)
 
 
 def finalize_middle_json(
