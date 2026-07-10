@@ -6,6 +6,7 @@ from tqdm import tqdm
 from mineru.backend.utils.html_image_utils import replace_inline_table_images
 from mineru.backend.utils.para_block_utils import (
     add_img_path_to_image_blocks,
+    assign_block_uuids,
     build_para_blocks_from_preproc,
     cleanup_internal_para_block_metadata,
     merge_para_text_blocks,
@@ -117,6 +118,7 @@ def finalize_middle_json(pdf_info_list):
 
     cleanup_internal_para_block_metadata(pdf_info_list)
     add_img_path_to_image_blocks(pdf_info_list)
+    assign_block_uuids(pdf_info_list)
 
 
 def result_to_middle_json(model_output_blocks_list, images_list, pdf_doc, image_writer):

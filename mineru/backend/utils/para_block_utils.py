@@ -1,5 +1,6 @@
 # Copyright (c) Opendatalab. All rights reserved.
 import copy
+import uuid
 
 from mineru.utils.enum_class import BlockType, SplitFlag
 from mineru.utils.span_block_fix import is_vertical_text_block_by_spans
@@ -28,6 +29,70 @@ INTERNAL_BLOCK_METADATA_KEYS = {
     OCR_DET_LINES_KEY,
     "line_avg_height",
 }
+
+
+def _assign_uuid_to_block(block):
+    """递归地为 block 及其所有嵌套 blocks 分配 block_id。"""
+    block["block_id"] = str(uuid.uuid4())
+    for sub_block in block.get("blocks", []):
+        _assign_uuid_to_block(sub_block)
+
+
+def _build_index_map_recursively(block, index_map):
+    """递归地构建 index -> block_id 映射。"""
+    idx = block.get("index")
+    if idx is not None:
+        index_map[idx] = block.get("block_id")
+    for sub_block in block.get("blocks", []):
+        _build_index_map_recursively(sub_block, index_map)
+
+
+def _collect_block_ids_from_block(block, index_map, block_ids):
+    """递归地从 block 及其嵌套 blocks 收集 block_ids。"""
+    idx = block.get("index")
+    if idx is not None and idx in index_map:
+        uuid_val = index_map[idx]
+        if uuid_val not in block_ids:
+            block_ids.append(uuid_val)
+    for sub_block in block.get("blocks", []):
+        _collect_block_ids_from_block(sub_block, index_map, block_ids)
+
+
+def assign_block_uuids(pdf_info_list):
+    """为 middle.json 中所有 block 分配唯一的 block_id (UUID v4)。
+
+    - 为 preproc_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
+    - 为 para_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
+    - 为 discarded_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
+    - 为 para_blocks 添加 block_ids 数组，引用对应的 preproc_blocks 的 block_id
+    """
+    for page_info in pdf_info_list:
+        preproc_blocks = page_info.get("preproc_blocks", [])
+        para_blocks = page_info.get("para_blocks", [])
+        discarded_blocks = page_info.get("discarded_blocks", [])
+
+        # Step 1: 为 preproc_blocks 分配 block_id（递归处理嵌套）
+        for block in preproc_blocks:
+            _assign_uuid_to_block(block)
+
+        # Step 2: 为 discarded_blocks 分配 block_id（递归处理嵌套）
+        for block in discarded_blocks:
+            _assign_uuid_to_block(block)
+
+        # Step 3: 构建 index -> block_id 映射（递归处理嵌套）
+        preproc_index_to_uuid = {}
+        for block in preproc_blocks:
+            _build_index_map_recursively(block, preproc_index_to_uuid)
+
+        # Step 4: 为 para_blocks 分配 block_id 和 block_ids（递归处理嵌套）
+        for block in para_blocks:
+            _assign_uuid_to_block(block)
+
+            # 构建 block_ids 数组（引用对应的 preproc_blocks）
+            block_ids = []
+            _collect_block_ids_from_block(block, preproc_index_to_uuid, block_ids)
+            if block_ids:
+                block["block_ids"] = block_ids
 
 
 def add_img_path_to_image_blocks(pdf_info_list, img_buket_path="images"):

@@ -3,7 +3,7 @@ import re
 from collections import defaultdict
 
 from mineru.backend.utils.html_image_utils import replace_inline_table_images, save_span_image_if_needed
-from mineru.backend.utils.para_block_utils import add_img_path_to_image_blocks
+from mineru.backend.utils.para_block_utils import add_img_path_to_image_blocks, assign_block_uuids
 from mineru.backend.office.office_magic_model import MagicModel
 from mineru.utils.enum_class import BlockType
 from mineru.version import __version__
@@ -171,5 +171,7 @@ def result_to_middle_json(model_output_blocks_list, image_writer):
     _link_index_entries_by_anchor(middle_json)
 
     add_img_path_to_image_blocks(middle_json.get("pdf_info", []))
+
+    assign_block_uuids(middle_json.get("pdf_info", []))
 
     return middle_json
