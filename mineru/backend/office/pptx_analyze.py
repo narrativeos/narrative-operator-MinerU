@@ -4,6 +4,7 @@ from io import BytesIO
 
 from loguru import logger
 from mineru.backend.office.model_output_to_middle_json import result_to_middle_json
+from mineru.backend.utils.para_block_utils import assign_block_uuids_to_model_list
 
 from mineru.model.pptx.main import convert_binary
 
@@ -24,7 +25,7 @@ def office_pptx_analyze(file_bytes, image_writer=None):
         results,
         image_writer,
     )
-
+    assign_block_uuids_to_model_list(results)
     return middle_json, results
 
 

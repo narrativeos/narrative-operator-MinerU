@@ -4,6 +4,7 @@ from io import BytesIO
 
 from loguru import logger
 from mineru.backend.office.model_output_to_middle_json import result_to_middle_json
+from mineru.backend.utils.para_block_utils import assign_block_uuids_to_model_list
 
 from mineru.model.docx.main import convert_binary
 
@@ -25,7 +26,7 @@ def office_docx_analyze(
         results,
         image_writer,
     )
-
+    assign_block_uuids_to_model_list(results)
     return middle_json, results
 
 if __name__ == '__main__':

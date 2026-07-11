@@ -18,6 +18,7 @@ from mineru.backend.hybrid.hybrid_model_output_to_middle_json import (
     finalize_middle_json,
     init_middle_json,
 )
+from mineru.backend.utils.para_block_utils import assign_block_uuids_to_model_list
 from mineru.backend.pipeline.model_init import (
     HybridModelSingleton,
     run_layout_inference,
@@ -1380,6 +1381,7 @@ def doc_analyze(
             )
         close_pdfium_document(pdf_doc)
         doc_closed = True
+        assign_block_uuids_to_model_list(model_list)
         clean_memory(device)
         return middle_json, model_list
     finally:
@@ -1701,6 +1703,7 @@ async def aio_doc_analyze(
             )
         close_pdfium_document(pdf_doc)
         doc_closed = True
+        assign_block_uuids_to_model_list(model_list)
         clean_memory(device)
         return middle_json, model_list
     finally:

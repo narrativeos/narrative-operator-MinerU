@@ -15,6 +15,7 @@ from .model_json_to_middle_json import (
     finalize_middle_json,
     init_middle_json,
 )
+from ..utils.para_block_utils import assign_block_uuids_to_model_list
 from ..utils.runtime_utils import exclude_progress_bar_idle_time
 from mineru.utils.config_reader import get_device, get_processing_window_size
 from ...utils.enum_class import ImageType
@@ -127,6 +128,7 @@ def _finalize_processing_window_context(
             context['middle_json']['pdf_info'],
             lang=context['lang'],
         )
+    assign_block_uuids_to_model_list(context['model_list'])
     logger.debug(
         f"Pipeline doc ready: doc{context['doc_index']} pages={context['page_count']}"
     )

@@ -31,11 +31,39 @@ INTERNAL_BLOCK_METADATA_KEYS = {
 }
 
 
-def _assign_uuid_to_block(block):
-    """递归地为 block 及其所有嵌套 blocks 分配 block_id。"""
-    block["block_id"] = str(uuid.uuid4())
+def _assign_uuid_to_block(block, existing_id=None):
+    """递归地为 block 及其所有嵌套 blocks 分配 block_id。
+    
+    如果 block 已有 block_id 且 existing_id 未指定，则保留原有 block_id。
+    如果 existing_id 指定，则使用该值作为 block_id（用于 model_list 到 preproc_blocks 的 ID 继承）。
+    """
+    if existing_id:
+        block["block_id"] = existing_id
+    elif "block_id" not in block:
+        block["block_id"] = str(uuid.uuid4())
     for sub_block in block.get("blocks", []):
         _assign_uuid_to_block(sub_block)
+
+
+def assign_block_uuids_to_model_list(model_list):
+    """为 model_list (VLM/pipeline 的原始模型输出) 中的每个 block 分配 block_id。
+    
+    在每个 block 被转换为 preproc_blocks 之前调用，确保 model.json 和 middle.json
+    中的 preproc_blocks 共享相同的 block_id，从而实现完整追溯：
+    
+        model.json blocks → middle.json preproc_blocks → middle.json para_blocks → content_list
+    
+    Args:
+        model_list: 按页组织的模型输出列表，model_list[page_idx] = [block1, block2, ...]
+    """
+    for page_blocks in model_list:
+        for block in page_blocks:
+            if "block_id" not in block:
+                block["block_id"] = str(uuid.uuid4())
+            # 也处理嵌套的 blocks（如视觉块的 image_body/table_body 等）
+            for sub_block in block.get("blocks", []):
+                if "block_id" not in sub_block:
+                    sub_block["block_id"] = str(uuid.uuid4())
 
 
 def _build_index_map_recursively(block, index_map):
@@ -61,9 +89,9 @@ def _collect_block_ids_from_block(block, index_map, block_ids):
 def assign_block_uuids(pdf_info_list):
     """为 middle.json 中所有 block 分配唯一的 block_id (UUID v4)。
 
-    - 为 preproc_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
+    - 为 preproc_blocks 中的每个 block（包括嵌套 blocks）分配 block_id（若已有则保留）
     - 为 para_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
-    - 为 discarded_blocks 中的每个 block（包括嵌套 blocks）分配 block_id
+    - 为 discarded_blocks 中的每个 block（包括嵌套 blocks）分配 block_id（若已有则保留）
     - 为 para_blocks 添加 block_ids 数组，引用对应的 preproc_blocks 的 block_id
     """
     for page_info in pdf_info_list:
@@ -71,11 +99,11 @@ def assign_block_uuids(pdf_info_list):
         para_blocks = page_info.get("para_blocks", [])
         discarded_blocks = page_info.get("discarded_blocks", [])
 
-        # Step 1: 为 preproc_blocks 分配 block_id（递归处理嵌套）
+        # Step 1: 为 preproc_blocks 分配 block_id（递归处理嵌套，保留已有 block_id）
         for block in preproc_blocks:
             _assign_uuid_to_block(block)
 
-        # Step 2: 为 discarded_blocks 分配 block_id（递归处理嵌套）
+        # Step 2: 为 discarded_blocks 分配 block_id（递归处理嵌套，保留已有 block_id）
         for block in discarded_blocks:
             _assign_uuid_to_block(block)
 

@@ -19,6 +19,7 @@ from .model_output_to_middle_json import (
     finalize_middle_json,
     init_middle_json,
 )
+from mineru.backend.utils.para_block_utils import assign_block_uuids_to_model_list
 from mineru.backend.utils.runtime_utils import exclude_progress_bar_idle_time
 from ...data.data_reader_writer import DataWriter
 from mineru.utils.pdf_image_tools import (
@@ -514,6 +515,7 @@ def doc_analyze(
             finalize_middle_json(middle_json["pdf_info"])
         close_pdfium_document(pdf_doc)
         doc_closed = True
+        assign_block_uuids_to_model_list(results)
         return middle_json, results
     finally:
         if not doc_closed:
@@ -613,6 +615,7 @@ async def aio_doc_analyze(
             await asyncio.to_thread(finalize_middle_json, middle_json["pdf_info"])
         close_pdfium_document(pdf_doc)
         doc_closed = True
+        assign_block_uuids_to_model_list(results)
         return middle_json, results
     finally:
         if not doc_closed:
