@@ -530,6 +530,14 @@ def make_blocks_to_content_list(para_block, img_buket_path, page_idx, page_size)
 
     para_content['page_idx'] = page_idx
 
+    block_id = para_block.get('block_id')
+    if block_id:
+        para_content['block_id'] = block_id
+
+    block_ids = para_block.get('block_ids')
+    if block_ids:
+        para_content['block_ids'] = block_ids
+
     return para_content
 
 
@@ -756,6 +764,14 @@ def make_blocks_to_content_list_v2(para_block, img_buket_path, page_size):
             int(x1 * 1000 / page_width),
             int(y1 * 1000 / page_height),
         ]
+
+    block_id = para_block.get('block_id')
+    if block_id:
+        para_content['block_id'] = block_id
+
+    block_ids = para_block.get('block_ids')
+    if block_ids:
+        para_content['block_ids'] = block_ids
 
     return para_content
 

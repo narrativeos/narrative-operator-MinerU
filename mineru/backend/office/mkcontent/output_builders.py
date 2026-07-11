@@ -527,6 +527,14 @@ def make_blocks_to_content_list(para_block, img_buket_path, page_idx):
     if isinstance(anchor, str) and anchor.strip():
         para_content["anchor"] = anchor.strip()
 
+    block_id = para_block.get('block_id')
+    if block_id:
+        para_content['block_id'] = block_id
+
+    block_ids = para_block.get('block_ids')
+    if block_ids:
+        para_content['block_ids'] = block_ids
+
     return para_content
 
 
@@ -668,6 +676,14 @@ def make_blocks_to_content_list_v2(para_block, img_buket_path):
     anchor = para_block.get("anchor")
     if isinstance(anchor, str) and anchor.strip():
         para_content["anchor"] = anchor.strip()
+
+    block_id = para_block.get('block_id')
+    if block_id:
+        para_content['block_id'] = block_id
+
+    block_ids = para_block.get('block_ids')
+    if block_ids:
+        para_content['block_ids'] = block_ids
 
     return para_content
 
