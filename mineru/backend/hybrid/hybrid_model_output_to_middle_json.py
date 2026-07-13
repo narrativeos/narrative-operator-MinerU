@@ -14,6 +14,7 @@ from mineru.backend.utils.para_block_utils import (
     iter_block_spans,
     merge_para_text_blocks,
 )
+from mineru.utils.enum_class import ContentType as MineruContentType
 from mineru.backend.hybrid.hybrid_magic_model import MagicModel
 from mineru.backend.utils.runtime_utils import cross_page_table_merge
 from mineru.backend.pipeline.model_init import run_ocr_inference
@@ -29,6 +30,57 @@ from mineru.utils.span_pre_proc import (
 from mineru.utils.title_level_postprocess import apply_title_leveling_to_pdf_info
 from mineru.utils.pdfium_guard import close_pdfium_child, close_pdfium_document, pdfium_guard
 from mineru.version import __version__
+
+
+def _propagate_hybrid_img_path(page_model_list: list, all_spans: list, width: int, height: int) -> None:
+    """将截图后生成的 image_path 从 span 提升回对应的原始 Hybrid block。
+
+    Hybrid 的 page_model_list 是原始模型输出（deepcopy 后），所以可以直接修改。
+    注意：原始 Hybrid block 的 bbox 是 [0,1] 归一化坐标，而 span 的 bbox 是像素坐标，
+    需要先将 span bbox 归一化后再匹配。使用容差匹配（±0.01）以处理精度差异。
+    """
+    # 构建归一化 bbox -> block 的映射
+    blocks_with_bbox = []
+    bbox_to_block: dict[tuple, dict] = {}
+    for block in page_model_list:
+        bbox = block.get("bbox")
+        if bbox is not None:
+            blocks_with_bbox.append(block)
+            bbox_to_block[tuple(bbox)] = block
+
+    TOLERANCE = 0.01  # 归一化坐标容差
+    for span in all_spans:
+        span_type = span.get("type")
+        if span_type not in (MineruContentType.IMAGE, MineruContentType.TABLE, MineruContentType.CHART, MineruContentType.INTERLINE_EQUATION):
+            continue
+        image_path = span.get("image_path")
+        if not image_path:
+            continue
+        span_bbox = span.get("bbox")
+        if span_bbox is None:
+            continue
+        # 将 span 的像素 bbox 归一化为 [0,1] 坐标以匹配原始 Hybrid block
+        s_x0, s_y0, s_x1, s_y1 = span_bbox
+        norm_bbox = (
+            s_x0 / width,
+            s_y0 / height,
+            s_x1 / width,
+            s_y1 / height,
+        )
+        # 先尝试精确匹配
+        block = bbox_to_block.get(tuple(norm_bbox))
+        # 如果精确匹配失败，尝试容差匹配
+        if block is None:
+            for candidate in blocks_with_bbox:
+                cb = candidate["bbox"]
+                if (abs(cb[0] - norm_bbox[0]) <= TOLERANCE and
+                    abs(cb[1] - norm_bbox[1]) <= TOLERANCE and
+                    abs(cb[2] - norm_bbox[2]) <= TOLERANCE and
+                    abs(cb[3] - norm_bbox[3]) <= TOLERANCE):
+                    block = candidate
+                    break
+        if block is not None:
+            block["img_path"] = image_path
 
 
 def _resolve_title_line_avg_height(title_block):
@@ -98,6 +150,10 @@ def blocks_to_page_info(
     for span in all_spans:
         if span["type"] in [ContentType.IMAGE, ContentType.TABLE, ContentType.CHART, ContentType.INTERLINE_EQUATION]:
             span = cut_image_and_table(span, page_pil_img, page_img_md5, page_index, image_writer, scale=scale)
+
+    # 将 image_path 从 span 提升回对应的原始 Hybrid block（模型输出），
+    # 这样 model.json 中的视觉块也会包含 img_path，便于下游直接访问
+    _propagate_hybrid_img_path(page_model_list, all_spans, width, height)
 
     replace_inline_table_images(table_blocks, image_writer, page_index)
 

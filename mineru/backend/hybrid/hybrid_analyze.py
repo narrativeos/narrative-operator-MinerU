@@ -1322,6 +1322,10 @@ def doc_analyze(
                         page_sizes,
                     )
                     model_list.extend(window_model_list)
+                    # 在中间 JSON 处理之前为当前窗口的 block 分配 block_id，
+                    # 这样 MagicModel（deepcopy 后）可以继承 block_id，
+                    # 确保 model.json 和 middle.json 的 block_id 一致
+                    assign_block_uuids_to_model_list(window_model_list)
                     if progress_bar is None:
                         progress_bar = tqdm(total=page_count, desc="Processing pages")
                     else:
@@ -1381,7 +1385,6 @@ def doc_analyze(
             )
         close_pdfium_document(pdf_doc)
         doc_closed = True
-        assign_block_uuids_to_model_list(model_list)
         clean_memory(device)
         return middle_json, model_list
     finally:
@@ -1642,6 +1645,10 @@ async def aio_doc_analyze(
                         page_sizes,
                     )
                     model_list.extend(window_model_list)
+                    # 在中间 JSON 处理之前为当前窗口的 block 分配 block_id，
+                    # 这样 MagicModel（deepcopy 后）可以继承 block_id，
+                    # 确保 model.json 和 middle.json 的 block_id 一致
+                    assign_block_uuids_to_model_list(window_model_list)
                     if progress_bar is None:
                         progress_bar = tqdm(total=page_count, desc="Processing pages")
                     else:
@@ -1703,7 +1710,6 @@ async def aio_doc_analyze(
             )
         close_pdfium_document(pdf_doc)
         doc_closed = True
-        assign_block_uuids_to_model_list(model_list)
         clean_memory(device)
         return middle_json, model_list
     finally:

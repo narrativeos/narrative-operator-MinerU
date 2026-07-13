@@ -36,6 +36,9 @@ OCR_DET_LINE_BLOCK_TYPES = {
 
 
 def _copy_raw_text_block_metadata(raw_block_type, block_info, block):
+    # 继承原始 block_info 的 block_id，确保 model.json 和 middle.json 的 block_id 一致
+    if "block_id" in block_info:
+        block["block_id"] = block_info["block_id"]
     if raw_block_type != BlockType.TEXT:
         return
     if "merge_prev" in block_info:
