@@ -1,5 +1,6 @@
 # Copyright (c) Opendatalab. All rights reserved.
 import copy
+import logging
 import uuid
 
 from mineru.utils.enum_class import BlockType, SplitFlag
@@ -45,25 +46,45 @@ def _assign_uuid_to_block(block, existing_id=None):
         _assign_uuid_to_block(sub_block)
 
 
+def _assign_block_uuid_to_layout_dets(layout_dets):
+    """为 pipeline layout_dets 中的每个 block 分配 block_id（递归处理所有嵌套 blocks）。"""
+    for block in layout_dets:
+        _assign_uuid_to_block(block)
+
+
 def assign_block_uuids_to_model_list(model_list):
     """为 model_list (VLM/pipeline 的原始模型输出) 中的每个 block 分配 block_id。
-    
+
     在每个 block 被转换为 preproc_blocks 之前调用，确保 model.json 和 middle.json
     中的 preproc_blocks 共享相同的 block_id，从而实现完整追溯：
-    
+
         model.json blocks → middle.json preproc_blocks → middle.json para_blocks → content_list
-    
+
     Args:
-        model_list: 按页组织的模型输出列表，model_list[page_idx] = [block1, block2, ...]
+        model_list: 按页组织的模型输出列表。
+            - VLM: model_list[page_idx] = [block1, block2, ...]
+            - pipeline: model_list[page_idx] = {'layout_dets': [...], 'page_info': {...}}
     """
-    for page_blocks in model_list:
-        for block in page_blocks:
-            if "block_id" not in block:
-                block["block_id"] = str(uuid.uuid4())
-            # 也处理嵌套的 blocks（如视觉块的 image_body/table_body 等）
-            for sub_block in block.get("blocks", []):
-                if "block_id" not in sub_block:
-                    sub_block["block_id"] = str(uuid.uuid4())
+    log = logging.getLogger(__name__)
+    for page_entry in model_list:
+        # Pipeline 路径：page_entry 是 {'layout_dets': [...], 'page_info': {...}}
+        if isinstance(page_entry, dict) and "layout_dets" in page_entry:
+            _assign_block_uuid_to_layout_dets(page_entry["layout_dets"])
+            continue
+        # VLM 路径：page_entry 是 [block1, block2, ...]
+        if isinstance(page_entry, list):
+            for block in page_entry:
+                if "block_id" not in block:
+                    block["block_id"] = str(uuid.uuid4())
+                for sub_block in block.get("blocks", []):
+                    if "block_id" not in sub_block:
+                        sub_block["block_id"] = str(uuid.uuid4())
+            continue
+        # 防御性处理：未知类型
+        log.warning(
+            "assign_block_uuids_to_model_list: unknown page_entry type %s, skipping",
+            type(page_entry).__name__,
+        )
 
 
 def _build_index_map_recursively(block, index_map):

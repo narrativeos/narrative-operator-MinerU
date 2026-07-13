@@ -450,6 +450,9 @@ class MagicModel:
                 "index": block["index"],
                 "score": block.get("score"),
             }
+            # 继承原始 block 的 block_id，确保 visual container 也可追溯
+            if "block_id" in block:
+                two_layer_block["block_id"] = block["block_id"]
             if original_block_type in [BlockType.IMAGE, BlockType.CHART] and block.get("sub_type"):
                 two_layer_block["sub_type"] = block["sub_type"]
             # 对blocks按index排序

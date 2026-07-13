@@ -3,9 +3,11 @@ import unittest
 
 from mineru.backend.utils.para_block_utils import (
     _assign_uuid_to_block,
+    _assign_block_uuid_to_layout_dets,
     _build_index_map_recursively,
     _collect_block_ids_from_block,
     assign_block_uuids,
+    assign_block_uuids_to_model_list,
 )
 
 
@@ -312,6 +314,151 @@ class TestAssignBlockUuids(unittest.TestCase):
         page = pdf_info_list[0]
         self.assertIn("block_id", page["para_blocks"][0])
         self.assertNotIn("block_ids", page["para_blocks"][0])
+
+
+class TestAssignBlockUuidToLayoutDets(unittest.TestCase):
+    """测试 _assign_block_uuid_to_layout_dets 的递归处理能力。"""
+
+    def test_simple_layout_dets(self):
+        layout_dets = [
+            {"type": "text", "bbox": [0, 0, 100, 100]},
+            {"type": "image", "bbox": [100, 0, 200, 100]},
+        ]
+        _assign_block_uuid_to_layout_dets(layout_dets)
+        self.assertIn("block_id", layout_dets[0])
+        self.assertIn("block_id", layout_dets[1])
+        self.assertNotEqual(layout_dets[0]["block_id"], layout_dets[1]["block_id"])
+
+    def test_layout_dets_with_nested_blocks(self):
+        """测试带有嵌套 blocks 的 layout_dets（如视觉容器块）。"""
+        layout_dets = [
+            {
+                "type": "image",
+                "bbox": [0, 0, 100, 100],
+                "blocks": [
+                    {"type": "image_body", "bbox": [0, 0, 100, 80]},
+                    {"type": "image_caption", "bbox": [0, 80, 100, 100]},
+                ],
+            },
+        ]
+        _assign_block_uuid_to_layout_dets(layout_dets)
+        self.assertIn("block_id", layout_dets[0])
+        self.assertIn("block_id", layout_dets[0]["blocks"][0])
+        self.assertIn("block_id", layout_dets[0]["blocks"][1])
+        # 所有 UUID 互不相同
+        uuids = [
+            layout_dets[0]["block_id"],
+            layout_dets[0]["blocks"][0]["block_id"],
+            layout_dets[0]["blocks"][1]["block_id"],
+        ]
+        self.assertEqual(len(uuids), len(set(uuids)))
+
+    def test_layout_dets_with_deep_nesting(self):
+        """测试深层嵌套（3层）的 layout_dets。"""
+        layout_dets = [
+            {
+                "type": "chart",
+                "bbox": [0, 0, 200, 200],
+                "blocks": [
+                    {
+                        "type": "chart_body",
+                        "bbox": [0, 0, 200, 180],
+                        "blocks": [
+                            {"type": "text", "bbox": [10, 10, 50, 50]},
+                        ],
+                    },
+                ],
+            },
+        ]
+        _assign_block_uuid_to_layout_dets(layout_dets)
+        self.assertIn("block_id", layout_dets[0])
+        self.assertIn("block_id", layout_dets[0]["blocks"][0])
+        self.assertIn("block_id", layout_dets[0]["blocks"][0]["blocks"][0])
+
+    def test_preserves_existing_block_id(self):
+        """测试已有 block_id 时不会覆盖。"""
+        existing_id = "existing-uuid-123"
+        layout_dets = [
+            {"type": "text", "block_id": existing_id},
+        ]
+        _assign_block_uuid_to_layout_dets(layout_dets)
+        self.assertEqual(layout_dets[0]["block_id"], existing_id)
+
+    def test_empty_layout_dets(self):
+        _assign_block_uuid_to_layout_dets([])
+        # Should not raise any errors
+
+
+class TestAssignBlockUuidsToModelList(unittest.TestCase):
+    """测试 assign_block_uuids_to_model_list 同时支持 VLM 和 pipeline 两种路径。"""
+
+    def test_vlm_list_format(self):
+        """测试 VLM 路径：page_entry 是 block 列表。"""
+        model_list = [
+            [
+                {"type": "text", "bbox": [0.1, 0.1, 0.5, 0.2]},
+                {"type": "image", "bbox": [0.5, 0.1, 0.9, 0.5], "blocks": [
+                    {"type": "image_body", "bbox": [0.5, 0.1, 0.9, 0.4]},
+                ]},
+            ],
+            [
+                {"type": "text", "bbox": [0.1, 0.6, 0.5, 0.8]},
+            ],
+        ]
+        assign_block_uuids_to_model_list(model_list)
+        # 第一页
+        self.assertIn("block_id", model_list[0][0])
+        self.assertIn("block_id", model_list[0][1])
+        self.assertIn("block_id", model_list[0][1]["blocks"][0])
+        # 第二页
+        self.assertIn("block_id", model_list[1][0])
+        # 不同页的 block_id 不同
+        self.assertNotEqual(model_list[0][0]["block_id"], model_list[1][0]["block_id"])
+
+    def test_pipeline_dict_format(self):
+        """测试 pipeline 路径：page_entry 是 {'layout_dets': [...], 'page_info': {...}}。"""
+        model_list = [
+            {
+                "layout_dets": [
+                    {"type": "text", "bbox": [0, 0, 100, 100]},
+                    {
+                        "type": "image",
+                        "bbox": [100, 0, 200, 100],
+                        "blocks": [
+                            {"type": "image_body", "bbox": [100, 0, 200, 80]},
+                        ],
+                    },
+                ],
+                "page_info": {"page_no": 0, "width": 800, "height": 1000},
+            },
+        ]
+        assign_block_uuids_to_model_list(model_list)
+        self.assertIn("block_id", model_list[0]["layout_dets"][0])
+        self.assertIn("block_id", model_list[0]["layout_dets"][1])
+        self.assertIn("block_id", model_list[0]["layout_dets"][1]["blocks"][0])
+
+    def test_mixed_formats(self):
+        """测试混合格式（VLM + pipeline 混用）。"""
+        model_list = [
+            # VLM 格式
+            [
+                {"type": "text", "bbox": [0.1, 0.1, 0.5, 0.2]},
+            ],
+            # Pipeline 格式
+            {
+                "layout_dets": [
+                    {"type": "text", "bbox": [0, 0, 100, 100]},
+                ],
+                "page_info": {"page_no": 1},
+            },
+        ]
+        assign_block_uuids_to_model_list(model_list)
+        self.assertIn("block_id", model_list[0][0])
+        self.assertIn("block_id", model_list[1]["layout_dets"][0])
+
+    def test_empty_model_list(self):
+        assign_block_uuids_to_model_list([])
+        # Should not raise any errors
 
 
 if __name__ == "__main__":

@@ -5,7 +5,11 @@ from tqdm import tqdm
 
 from mineru.backend.utils.html_image_utils import replace_inline_table_images
 from mineru.backend.utils.formula_number import optimize_formula_number_blocks
-from mineru.backend.utils.para_block_utils import add_img_path_to_image_blocks, assign_block_uuids
+from mineru.backend.utils.para_block_utils import (
+    add_img_path_to_image_blocks,
+    assign_block_uuids,
+    assign_block_uuids_to_model_list,
+)
 from mineru.backend.utils.runtime_utils import cross_page_table_merge
 from mineru.backend.pipeline.model_init import (
     AtomModelSingleton,
@@ -94,6 +98,10 @@ def append_page_model_infos_to_middle_json(
                 page_index,
                 ocr_enable=ocr_enable,
             )
+            if page_info is not None:
+                # 将 image_path 从 preproc_blocks 的 span 提升回原始 layout_dets，
+                # 这样 model.json 中的视觉块也会包含 img_path，便于下游直接访问
+                _propagate_img_path_to_layout_dets(page_model_info, page_info.get("preproc_blocks", []))
             if page_info is None:
                 with pdfium_guard():
                     page_w, page_h = map(int, page.get_size())
@@ -122,6 +130,10 @@ def append_batch_results_to_middle_json(
         page_model_info = build_page_model_info(page_layout_dets, page_index, image_dict['img_pil'])
         page_model_infos.append(page_model_info)
 
+    # 在 MagicModel 构造之前为新增的 layout_dets 分配 block_id，
+    # 这样 MagicModel.__copy_block_fields 可以继承 block_id 到 preproc_blocks
+    # 只处理新增的页面，避免重复遍历已处理的页面
+    assign_block_uuids_to_model_list(page_model_infos)
     if model_list is not None:
         model_list.extend(page_model_infos)
 
@@ -240,6 +252,8 @@ def init_middle_json():
 
 def result_to_middle_json(model_list, images_list, pdf_doc, image_writer, lang=None, ocr_enable=False, formula_enable=None):
     middle_json = init_middle_json()
+    # 在 MagicModel 构造之前为 layout_dets 分配 block_id
+    assign_block_uuids_to_model_list(model_list)
     with tqdm(total=len(model_list), desc="Processing pages") as progress_bar:
         append_page_model_infos_to_middle_json(
             middle_json,
@@ -254,6 +268,81 @@ def result_to_middle_json(model_list, images_list, pdf_doc, image_writer, lang=N
     finalize_middle_json(middle_json["pdf_info"], lang=lang)
     close_pdfium_document(pdf_doc)
     return middle_json
+
+
+def _propagate_img_path_to_layout_dets(page_model_info: dict, preproc_blocks: list) -> None:
+    """将截图后生成的 image_path 从 preproc_blocks 的 span 提升回原始 layout_dets。
+
+    这样 model.json 中的视觉块也会包含 img_path，便于下游（如 Popo）直接访问，
+    而不需要通过 bbox 模糊匹配从 middle.json 补充。
+
+    使用两层匹配策略：
+    1. 精确匹配（tuple 键查找）- O(1)
+    2. 像素容差匹配（±2 像素）- O(n)，仅在精确匹配失败时启用
+    """
+    layout_dets = page_model_info.get("layout_dets", [])
+    # 构建 bbox -> layout_det 的映射（使用 tuple 作为键）
+    bbox_to_det: dict[tuple, dict] = {}
+    for det in layout_dets:
+        bbox = det.get("bbox")
+        if bbox is not None:
+            bbox_to_det[tuple(bbox)] = det
+
+    # 从 preproc_blocks 中提取视觉块及其 image_path
+    for block in preproc_blocks:
+        block_type = block.get("type")
+        if block_type not in (
+            BlockType.IMAGE_BODY, BlockType.TABLE_BODY,
+            BlockType.CHART_BODY, BlockType.INTERLINE_EQUATION,
+        ):
+            continue
+        # 从 body 的 span 中提取 image_path，找到第一个后跳出
+        found = False
+        for line in block.get("lines", []):
+            if found:
+                break
+            for span in line.get("spans", []):
+                span_type = span.get("type")
+                if span_type not in (ContentType.IMAGE, ContentType.TABLE, ContentType.CHART, ContentType.INTERLINE_EQUATION):
+                    continue
+                image_path = span.get("image_path")
+                if not image_path:
+                    continue
+                span_bbox = span.get("bbox")
+                if span_bbox is None:
+                    continue
+                # 策略 1: 精确匹配
+                det = bbox_to_det.get(tuple(span_bbox))
+                # 策略 2: 精确匹配失败时，像素容差匹配（±2 像素）
+                if det is None:
+                    det = _find_layout_det_by_bbox_tolerance(layout_dets, span_bbox, tolerance=2)
+                if det is not None:
+                    det["img_path"] = image_path
+                    found = True
+                    break
+
+
+def _find_layout_det_by_bbox_tolerance(layout_dets: list, target_bbox: list, tolerance: int = 2) -> dict | None:
+    """在 layout_dets 中寻找 bbox 与目标 bbox 在容差范围内的 layout_det。
+
+    Args:
+        layout_dets: layout_det 列表
+        target_bbox: 目标 bbox [x0, y0, x1, y1]
+        tolerance: 像素容差（默认 ±2 像素）
+
+    Returns:
+        匹配的 layout_det，或 None
+    """
+    for det in layout_dets:
+        bbox = det.get("bbox")
+        if bbox is None:
+            continue
+        if (abs(bbox[0] - target_bbox[0]) <= tolerance and
+            abs(bbox[1] - target_bbox[1]) <= tolerance and
+            abs(bbox[2] - target_bbox[2]) <= tolerance and
+            abs(bbox[3] - target_bbox[3]) <= tolerance):
+            return det
+    return None
 
 
 def make_page_info_dict(blocks, page_id, page_w, page_h, discarded_blocks):

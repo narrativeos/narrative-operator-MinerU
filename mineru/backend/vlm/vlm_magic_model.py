@@ -226,6 +226,9 @@ class MagicModel:
                 "lines": [line],
                 "index": index,
             }
+            # 继承原始 block_info 的 block_id，确保 model.json 和 middle.json 的 block_id 一致
+            if "block_id" in block_info:
+                block["block_id"] = block_info["block_id"]
             if block_sub_type:
                 block["sub_type"] = block_sub_type
             if raw_block_type == "table" and "cell_merge" in block_info:
