@@ -14,6 +14,7 @@ from mineru.backend.utils.para_block_utils import (
     iter_block_spans,
     merge_para_text_blocks,
 )
+from mineru.backend.pipeline.page_type_classifier import classify_all_pages
 from mineru.utils.enum_class import ContentType as MineruContentType
 from mineru.backend.hybrid.hybrid_magic_model import MagicModel
 from mineru.backend.utils.runtime_utils import cross_page_table_merge
@@ -330,6 +331,8 @@ def finalize_middle_json_from_preproc(pdf_info_list, effort="medium"):
     cleanup_internal_para_block_metadata(pdf_info_list)
     add_img_path_to_image_blocks(pdf_info_list)
     assign_block_uuids(pdf_info_list)
+    # 页面类型分类基于最终的 preproc_blocks，在所有 block 后处理之后执行
+    classify_all_pages(pdf_info_list)
 
 
 def finalize_middle_json(

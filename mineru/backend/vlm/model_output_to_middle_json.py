@@ -20,6 +20,7 @@ from mineru.utils.hash_utils import bytes_md5
 from mineru.utils.title_level_postprocess import apply_title_leveling_to_pdf_info
 from mineru.utils.pdfium_guard import close_pdfium_child, close_pdfium_document, pdfium_guard
 from mineru.version import __version__
+from mineru.backend.pipeline.page_type_classifier import classify_all_pages
 
 
 def _propagate_vlm_img_path(page_blocks: list, all_spans: list, width: int, height: int) -> None:
@@ -184,6 +185,8 @@ def finalize_middle_json(pdf_info_list):
     cleanup_internal_para_block_metadata(pdf_info_list)
     add_img_path_to_image_blocks(pdf_info_list)
     assign_block_uuids(pdf_info_list)
+    # 页面类型分类基于最终的 preproc_blocks，在所有 block 后处理之后执行
+    classify_all_pages(pdf_info_list)
 
 
 def result_to_middle_json(model_output_blocks_list, images_list, pdf_doc, image_writer):

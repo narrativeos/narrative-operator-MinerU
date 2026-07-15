@@ -131,3 +131,33 @@ class NotExtractType(Enum):
     IMAGE_FOOTNOTE = BlockType.IMAGE_FOOTNOTE
     CODE_CAPTION = BlockType.CODE_CAPTION
     PHONETIC = BlockType.PHONETIC
+
+
+class PageType:
+    """页面类型枚举，用于标识整页的语义角色。
+
+    页面类型基于布局分析结果（block-level）通过规则推断得出，
+    不依赖额外的深度学习模型。
+    """
+    # 封面相关
+    COVER = "cover"                      # 封面页：文档封面，通常包含主标题、作者、日期等
+    HALF_TITLE = "half_title"            # 半标题页：只有书名/文档名的简化标题页（扉页前的那页）
+    COPYRIGHT = "copyright"              # 版权页：包含版权信息、ISBN 等
+    COLOPHON = "colophon"                # 版本记录页：排版/印刷信息页面
+    BACK_COVER = "back_cover"            # 封底页：文档最后一页，内容稀疏
+
+    # 导航相关
+    TOC = "toc"                          # 目录页：以目录/索引内容为主的页面
+    INDEX = "index"                      # 索引页：按字母/拼音排序的索引条目页面
+    GLOSSARY = "glossary"                # 术语表页：术语及其解释的页面
+
+    # 正文结构
+    CHAPTER_START = "chapter_start"      # 章节起始页：以章节标题开头的页面
+    BODY = "body"                        # 正文页：常规内容页面（最常见）
+    APPENDIX = "appendix"                # 附录页
+    ACKNOWLEDGMENT = "acknowledgment"    # 致谢页
+    REFERENCE = "reference"              # 参考文献页
+
+    # 特殊内容
+    BLANK = "blank"                      # 空白页：几乎没有有效内容
+    IMAGE_DOMINANT = "image_dominant"    # 图片为主页：以图片/图表为主，文本较少

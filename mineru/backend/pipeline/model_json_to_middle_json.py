@@ -16,6 +16,7 @@ from mineru.backend.pipeline.model_init import (
     run_ocr_inference,
 )
 from mineru.backend.pipeline.para_split import para_split
+from mineru.backend.pipeline.page_type_classifier import classify_all_pages
 from mineru.utils.cut_image import cut_image_and_table
 from mineru.utils.enum_class import ContentType, BlockType
 from mineru.utils.title_level_postprocess import apply_title_leveling_to_pdf_info
@@ -235,6 +236,8 @@ def finalize_middle_json_from_preproc(pdf_info_list):
     _post_block_process(pdf_info_list)
     add_img_path_to_image_blocks(pdf_info_list)
     assign_block_uuids(pdf_info_list)
+    # 页面类型分类基于最终的 preproc_blocks，在所有 block 后处理之后执行
+    classify_all_pages(pdf_info_list)
 
 
 def finalize_middle_json(
