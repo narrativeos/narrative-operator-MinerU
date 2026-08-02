@@ -145,6 +145,7 @@ class PageType:
     COPYRIGHT = "copyright"              # 版权页：包含版权信息、ISBN 等
     COLOPHON = "colophon"                # 版本记录页：排版/印刷信息页面
     BACK_COVER = "back_cover"            # 封底页：文档最后一页，内容稀疏
+    PREFACE = "preface"                  # 前置页：序/前言/作者简介等正文前内容（front matter）
 
     # 导航相关
     TOC = "toc"                          # 目录页：以目录/索引内容为主的页面
