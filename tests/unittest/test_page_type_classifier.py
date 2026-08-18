@@ -10,8 +10,18 @@ from mineru.backend.pipeline.page_type_classifier import (
     _calculate_visual_area_ratio,
     _count_toc_lines_in_page,
     _detect_toc_page_set,
+    _page_is_magazine_toc,
+    _count_magazine_toc_lines_in_page,
 )
 from mineru.utils.enum_class import BlockType, PageType
+
+
+def _assert_page_type(result, expected_primary, expected_secondary=None):
+    """Helper to assert page type result (primary, secondary) tuple."""
+    assert isinstance(result, tuple), f"Expected tuple, got {type(result)}: {result}"
+    primary, secondary = result
+    assert primary == expected_primary, f"Expected primary={expected_primary}, got {primary}"
+    assert secondary == expected_secondary, f"Expected secondary={expected_secondary}, got {secondary}"
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -75,7 +85,8 @@ class TestInferPageType(unittest.TestCase):
 
     def test_blank_page(self):
         page_info = self._make_page_info([])
-        self.assertEqual(infer_page_type(page_info, 0, 1), PageType.BLANK)
+        result = infer_page_type(page_info, 0, 1)
+        _assert_page_type(result, PageType.BLANK)
 
     def test_cover_page(self):
         blocks = [
@@ -83,14 +94,16 @@ class TestInferPageType(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [100, 300, 700, 400], "lines": [{"spans": [{"content": "Author Name"}]}]},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 0, 10), PageType.COVER)
+        result = infer_page_type(page_info, 0, 10)
+        _assert_page_type(result, PageType.COVER)
 
     def test_back_cover_page(self):
         blocks = [
             {"type": BlockType.IMAGE, "bbox": [100, 100, 700, 200], "lines": []},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 9, 10), PageType.BACK_COVER)
+        result = infer_page_type(page_info, 9, 10)
+        _assert_page_type(result, PageType.BACK_COVER)
 
     def test_toc_page(self):
         blocks = [
@@ -99,7 +112,8 @@ class TestInferPageType(unittest.TestCase):
         ]
         blocks.append({"type": BlockType.TEXT, "bbox": [100, 350, 700, 400], "lines": [{"spans": [{"content": "Other"}]}]})
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 2, 10), PageType.TOC)
+        result = infer_page_type(page_info, 2, 10)
+        _assert_page_type(result, PageType.TOC)
 
     def test_reference_page(self):
         blocks = [
@@ -107,7 +121,8 @@ class TestInferPageType(unittest.TestCase):
             for i in range(6)
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 8, 10), PageType.REFERENCE)
+        result = infer_page_type(page_info, 8, 10)
+        _assert_page_type(result, PageType.REFERENCE)
 
     def test_chapter_start_page(self):
         blocks = [
@@ -116,14 +131,16 @@ class TestInferPageType(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [100, 450, 700, 600], "lines": [{"spans": [{"content": "More text..."}]}]},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 3, 20), PageType.CHAPTER_START)
+        result = infer_page_type(page_info, 3, 20)
+        _assert_page_type(result, PageType.CHAPTER_START)
 
     def test_copyright_page(self):
         blocks = [
             {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{"content": "Copyright 2024. ISBN 123-456."}]}]},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 1, 10), PageType.COPYRIGHT)
+        result = infer_page_type(page_info, 1, 10)
+        _assert_page_type(result, PageType.COPYRIGHT)
 
     def test_image_dominant_page(self):
         # Page 800x1000, image covers most of the page
@@ -131,7 +148,8 @@ class TestInferPageType(unittest.TestCase):
             {"type": BlockType.IMAGE, "bbox": [50, 50, 750, 950], "lines": []},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 5, 10), PageType.IMAGE_DOMINANT)
+        result = infer_page_type(page_info, 5, 10)
+        _assert_page_type(result, PageType.IMAGE_DOMINANT)
 
     def test_body_page(self):
         # Body page: multiple text blocks, no title at top, no special keywords
@@ -141,7 +159,8 @@ class TestInferPageType(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [100, 500, 700, 600], "lines": [{"spans": [{"content": "Third paragraph continues the discussion"}]}]},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 5, 20), PageType.BODY)
+        result = infer_page_type(page_info, 5, 20)
+        _assert_page_type(result, PageType.BODY)
 
     def test_glossary_page(self):
         blocks = [
@@ -149,7 +168,8 @@ class TestInferPageType(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900], "lines": [{"spans": [{"content": "Term A: Definition A"}]}]},
         ]
         page_info = self._make_page_info(blocks)
-        self.assertEqual(infer_page_type(page_info, 15, 20), PageType.GLOSSARY)
+        result = infer_page_type(page_info, 15, 20)
+        _assert_page_type(result, PageType.GLOSSARY)
 
 
 class TestClassifyAllPages(unittest.TestCase):
@@ -263,7 +283,8 @@ class TestPrefaceCoverEnhancement(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [50, 100, 400, 200], "lines": [{"spans": [{"content": "工业 4.0 是信息技术..."}]}]},
         ]
         page_info = {"preproc_blocks": blocks, "page_size": [500, 700]}
-        self.assertEqual(infer_page_type(page_info, 5, 20, body_start=12), PageType.PREFACE)
+        result = infer_page_type(page_info, 5, 20, body_start=12)
+        _assert_page_type(result, PageType.PREFACE)
 
     def test_cover_front_matter_not_first_page(self):
         # 重复扉页（非首页）：居中大标题 + 稀疏 + 无表格 → cover
@@ -272,7 +293,8 @@ class TestPrefaceCoverEnhancement(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [200, 300, 300, 320], "lines": [{"spans": [{"content": "第1卷"}]}]},
         ]
         page_info = {"preproc_blocks": blocks, "page_size": [500, 700]}
-        self.assertEqual(infer_page_type(page_info, 3, 20, body_start=12), PageType.COVER)
+        result = infer_page_type(page_info, 3, 20, body_start=12)
+        _assert_page_type(result, PageType.COVER)
 
     def test_toc_page_not_cover(self):
         # 目录页（在 toc_pages 内）不得判为 cover，即使有居中章节标题
@@ -281,10 +303,8 @@ class TestPrefaceCoverEnhancement(unittest.TestCase):
             {"type": BlockType.TEXT, "bbox": [50, 200, 400, 600], "lines": [{"spans": [{"content": "第1章 液压理论与工作介质\n基础 …… 3\n1.1 液压流体力学常用公式 …… 5"}]}]},
         ]
         page_info = {"preproc_blocks": blocks, "page_size": [500, 700]}
-        self.assertEqual(
-            infer_page_type(page_info, 11, 20, toc_pages={12}, body_start=22),
-            PageType.TOC,
-        )
+        result = infer_page_type(page_info, 11, 20, toc_pages={12}, body_start=22)
+        _assert_page_type(result, PageType.TOC)
 
     def test_cover_excludes_table_page(self):
         # 含表格块的页面不得判为 cover（如 手册总览 层级表 → preface）
@@ -294,7 +314,8 @@ class TestPrefaceCoverEnhancement(unittest.TestCase):
             {"type": BlockType.TABLE, "bbox": [240, 90, 460, 590], "lines": []},
         ]
         page_info = {"preproc_blocks": blocks, "page_size": [500, 700]}
-        self.assertEqual(infer_page_type(page_info, 2, 20, body_start=12), PageType.PREFACE)
+        result = infer_page_type(page_info, 2, 20, body_start=12)
+        _assert_page_type(result, PageType.PREFACE)
 
 
 if __name__ == "__main__":

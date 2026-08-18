@@ -84,12 +84,40 @@ _TOC_LINE_PATTERN = re.compile(
     r".*?(?:[……·]{1,}|\.{2,})\s*[\dIVXivx]+"
 )
 
+# 杂志/生活类目录行模式：页码(2-3位数字) + 可选空白 + 文章标题(至少4个非数字字符)
+# 例如: "010京沪高铁，让旅客出行更美好" (无空格), "070 黔味越山海，酸香漫京城" (有空格)
+_MAGAZINE_TOC_LINE_PATTERN = re.compile(
+    r"^\s*\d{2,3}\s?[^\d\s].{4,}"
+)
+
+# 杂志目录板块标题模式：中文标题 + 英文标题（空格分隔）
+# 例如: "印象Impression", "专题 Feature", "畅游 Journey", "寻味Cuisine"
+_MAGAZINE_TOC_SECTION_PATTERN = re.compile(
+    r"[一-龥]{1,6}\s*[A-Za-z]{2,}"
+)
+
+# 杂志目录行阈值：至少 N 行杂志类目录条目才认为是目录页
+MAGAZINE_TOC_LINE_THRESHOLD = 5
+
+# 版权页专用关键词（更严格，避免与杂志TOC板块标题中的英文词混淆）
+# 这些关键词通常只出现在真正的版权/出版信息中
+_STRICT_COPYRIGHT_KEYWORDS = [
+    "isbn", "©", "著作权", "版权所有", "copyright page", "all rights reserved",
+    "ISSN", "CN", "出版者", "发行人", "publisher",
+]
+
+# 版本记录页专用关键词（更严格）
+_STRICT_COLOPHON_KEYWORDS = [
+    "版本记录", "排印", "印刷单位", "印次", "印数", "开本", "字数",
+    "版次", "印张", "collophon", "printing", "出版日期",
+]
+
 # 目录页页眉关键词
 _TOC_HEADER_PATTERN = re.compile(r"目\s*录|CONTENTS", re.IGNORECASE)
 
 
 def _count_toc_lines_in_page(page_info: Dict) -> int:
-    """统计页面文本中 TOC 条目行数（章节号 + 引导符 + 页码）。"""
+    """统计页面文本中 TOC 条目行数（学术型 + 杂志型）。"""
     total = 0
     for block in page_info.get("preproc_blocks", []):
         text = ""
@@ -99,7 +127,108 @@ def _count_toc_lines_in_page(page_info: Dict) -> int:
         for ln in text.split("\n"):
             if _TOC_LINE_PATTERN.search(ln):
                 total += 1
+            elif _MAGAZINE_TOC_LINE_PATTERN.search(ln.strip()):
+                total += 1
     return total
+
+
+def _count_magazine_toc_lines_in_page(page_info: Dict) -> int:
+    """统计页面中杂志类目录条目行数（页码数字 + 文章标题格式）。"""
+    total = 0
+    for block in page_info.get("preproc_blocks", []):
+        text = ""
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text += str(span.get("content", ""))
+        for ln in text.split("\n"):
+            if _MAGAZINE_TOC_LINE_PATTERN.search(ln.strip()):
+                total += 1
+    return total
+
+
+def _page_has_magazine_toc_section(blocks: List[Dict]) -> bool:
+    """检查页面是否有杂志目录板块标题（中文+英文标题模式）。"""
+    title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
+    for block in blocks:
+        if block.get("type") in title_types:
+            block_text = ""
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    block_text += span.get("content", "")
+            if _MAGAZINE_TOC_SECTION_PATTERN.search(block_text):
+                return True
+    return False
+
+
+def _page_is_magazine_toc(page_info: Dict) -> bool:
+    """判断页面是否为杂志/生活类目录页。
+
+    判定条件：
+    - 5+ 杂志类目录行，或
+    - 3+ 杂志类目录行 + 杂志板块标题
+    """
+    mag_toc_count = _count_magazine_toc_lines_in_page(page_info)
+    blocks = page_info.get("preproc_blocks", [])
+    has_section = _page_has_magazine_toc_section(blocks)
+    if mag_toc_count >= MAGAZINE_TOC_LINE_THRESHOLD:
+        return True
+    if mag_toc_count >= 3 and has_section:
+        return True
+    return False
+
+
+def _has_strict_copyright_in_non_toc_blocks(page_info: Dict) -> bool:
+    """检查页面是否有真正的版权信息（在非TOC板块标题的block中）。
+    
+    用于区分：
+    - 真正的版权页（有ISBN、著作权声明等独立block）
+    - 杂志TOC页面（板块标题中的英文词如"Impression"误触发版权检测）
+    """
+    title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
+    for block in page_info.get("preproc_blocks", []):
+        # 跳过TOC板块标题block（避免"印象Impression"等误触发）
+        if block.get("type") in title_types:
+            block_text = ""
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    block_text += span.get("content", "")
+            if _MAGAZINE_TOC_SECTION_PATTERN.search(block_text):
+                continue
+        # 检查非标题block中的严格版权关键词
+        block_text = ""
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                block_text += span.get("content", "")
+        if _contains_keyword(block_text, _STRICT_COPYRIGHT_KEYWORDS):
+            return True
+    return False
+
+
+def _has_strict_colophon_in_non_toc_blocks(page_info: Dict) -> bool:
+    """检查页面是否有真正的版本记录信息（在非TOC板块标题的block中）。
+    
+    用于区分：
+    - 真正的版本记录页（有印刷单位、印次、印数等独立block）
+    - 杂志TOC页面（板块标题中的英文词如"Impression"误触发版本记录检测）
+    """
+    title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
+    for block in page_info.get("preproc_blocks", []):
+        # 跳过TOC板块标题block
+        if block.get("type") in title_types:
+            block_text = ""
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    block_text += span.get("content", "")
+            if _MAGAZINE_TOC_SECTION_PATTERN.search(block_text):
+                continue
+        # 检查非标题block中的严格版本记录关键词
+        block_text = ""
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                block_text += span.get("content", "")
+        if _contains_keyword(block_text, _STRICT_COLOPHON_KEYWORDS):
+            return True
+    return False
 
 
 def _page_has_toc_header(page_info: Dict) -> bool:
@@ -338,7 +467,7 @@ def infer_page_type(
     total_pages: int,
     toc_pages: Optional[Set[int]] = None,
     body_start: Optional[int] = None,
-) -> str:
+) -> tuple:
     """推断单个页面的类型。
 
     Args:
@@ -351,7 +480,9 @@ def infer_page_type(
             front-matter 判定（保持旧调用兼容）
 
     Returns:
-        PageType 枚举值字符串
+        (primary_type, secondary_type) 元组。
+        primary_type 为 PageType 枚举值字符串，secondary_type 为
+        次要类型（如 TOC+Copyright 混合页时为 Copyright）或 None。
     """
     blocks = page_info.get("preproc_blocks", [])
     page_size = page_info.get("page_size", [0, 0])
@@ -362,13 +493,29 @@ def infer_page_type(
     # 前置页（正文开始前）：仅当 body_start 已知时启用
     is_front_matter = body_start is not None and (page_idx + 1) < body_start
 
+    # 提前检测页面是否包含多种类型特征（用于混合页判定）
+    is_mag_toc = _page_is_magazine_toc(page_info)
+    is_toc_in_set = toc_pages is not None and (page_idx + 1) in toc_pages
+    index_count = block_counts.get(BlockType.INDEX, 0)
+    is_index_toc = (len(blocks) > 0 and index_count / len(blocks) >= TOC_INDEX_RATIO_THRESHOLD)
+    is_toc = is_toc_in_set or is_index_toc or is_mag_toc
+
+    # 版权/版本记录检测：对于杂志TOC页面使用更严格的检测，
+    # 避免板块标题中的英文词（如"印象Impression"）误触发
+    if is_mag_toc:
+        has_copyright = _has_strict_copyright_in_non_toc_blocks(page_info)
+        has_colophon = _has_strict_colophon_in_non_toc_blocks(page_info)
+    else:
+        has_copyright = _contains_keyword(block_text, COPYRIGHT_KEYWORDS)
+        has_colophon = _contains_keyword(block_text, COLOPHON_KEYWORDS)
+
     # 1. 空白页
     if len(blocks) <= BLANK_BLOCK_THRESHOLD:
-        return PageType.BLANK
+        return (PageType.BLANK, None)
 
     # 2. 封面页（首页 + doc_title；或前置页 + 居中大标题 + 内容稀疏，排除目录页与表格页）
     if page_idx == 0 and _has_doc_title(blocks) and _is_content_sparse(blocks):
-        return PageType.COVER
+        return (PageType.COVER, None)
     if (
         is_front_matter
         and (toc_pages is None or (page_idx + 1) not in toc_pages)
@@ -376,19 +523,25 @@ def infer_page_type(
         and _is_content_sparse(blocks)
         and not _has_table_block(blocks)
     ):
-        return PageType.COVER
+        return (PageType.COVER, None)
 
     # 3. 封底页（最后一页 + 内容非常稀疏）
     if page_idx == total_pages - 1 and _is_very_sparse(blocks):
-        return PageType.BACK_COVER
+        return (PageType.BACK_COVER, None)
 
-    # 4. 版权页（包含版权关键词）—— 在 half_title 之前检查，避免版权页被误判为半标题页
-    if _contains_keyword(block_text, COPYRIGHT_KEYWORDS):
-        return PageType.COPYRIGHT
+    # 4. 版权页 + 目录混合检测
+    if has_copyright:
+        if is_toc:
+            # 版权 + 目录混合页：主类型为 TOC，次要类型为 COPYRIGHT
+            return (PageType.TOC, PageType.COPYRIGHT)
+        return (PageType.COPYRIGHT, None)
 
-    # 5. 版本记录页
-    if _contains_keyword(block_text, COLOPHON_KEYWORDS):
-        return PageType.COLOPHON
+    # 5. 版本记录页 + 目录混合检测
+    if has_colophon:
+        if is_toc:
+            # 版本记录 + 目录混合页：主类型为 TOC，次要类型为 COLOPHON
+            return (PageType.TOC, PageType.COLOPHON)
+        return (PageType.COLOPHON, None)
 
     # 6. 半标题页（封面后的几页 + 内容极少 + 只有标题）
     if page_idx <= 3 and len(blocks) <= HALF_TITLE_MAX_BLOCKS:
@@ -403,44 +556,46 @@ def infer_page_type(
             if not _has_doc_title(blocks) or len(blocks) < COVER_MAX_BLOCKS:
                 # 进一步检查：半标题页通常只有一两个 block
                 if len(blocks) <= 2:
-                    return PageType.HALF_TITLE
+                    return (PageType.HALF_TITLE, None)
 
     # 7. 目录页（行密度区间检测优先；index block 占比兜底）
-    if toc_pages is not None and (page_idx + 1) in toc_pages:
-        return PageType.TOC
-    index_count = block_counts.get(BlockType.INDEX, 0)
-    if len(blocks) > 0 and index_count / len(blocks) >= TOC_INDEX_RATIO_THRESHOLD:
-        return PageType.TOC
+    if is_toc_in_set:
+        return (PageType.TOC, None)
+    if is_index_toc:
+        return (PageType.TOC, None)
+    # 杂志类目录页兜底
+    if is_mag_toc:
+        return (PageType.TOC, None)
 
     # 8. 参考文献页（ref_text 占主导）
     ref_count = block_counts.get(BlockType.REF_TEXT, 0)
     if len(blocks) > 0 and ref_count / len(blocks) >= REFERENCE_RATIO_THRESHOLD:
-        return PageType.REFERENCE
+        return (PageType.REFERENCE, None)
 
     # 9. 致谢页
     if _contains_keyword(block_text, ACKNOWLEDGMENT_KEYWORDS):
         # 只有当致谢相关文本是主要内容时才判定
         if _is_title_or_text_dominant(blocks, ACKNOWLEDGMENT_KEYWORDS):
-            return PageType.ACKNOWLEDGMENT
+            return (PageType.ACKNOWLEDGMENT, None)
 
     # 10. 附录页
     if _contains_keyword(block_text, APPENDIX_KEYWORDS):
         if _is_title_or_text_dominant(blocks, APPENDIX_KEYWORDS):
-            return PageType.APPENDIX
+            return (PageType.APPENDIX, None)
 
     # 11. 术语表页
     if _contains_keyword(block_text, GLOSSARY_KEYWORDS):
         if _is_title_or_text_dominant(blocks, GLOSSARY_KEYWORDS):
-            return PageType.GLOSSARY
+            return (PageType.GLOSSARY, None)
 
     # 12. 索引页（注意与目录区分：索引通常有更密集的条目和页码）
     if _contains_keyword(block_text, INDEX_KEYWORDS):
         if _is_title_or_text_dominant(blocks, INDEX_KEYWORDS):
-            return PageType.INDEX
+            return (PageType.INDEX, None)
 
     # 13. 前置页（front matter 默认：正文前的非封面/版权/目录页，即序/前言/作者简介等）
     if is_front_matter:
-        return PageType.PREFACE
+        return (PageType.PREFACE, None)
 
     # 14. 章节起始页（以标题开头，且不在文档开头/结尾的稀疏区域）
     if _has_doc_title(blocks) or _is_title_at_top(blocks, page_h):
@@ -452,14 +607,14 @@ def infer_page_type(
         )
         if title_count > 0 and title_count / max(len(blocks), 1) < 0.8:
             # 标题不是页面的全部内容（否则可能是半标题页）
-            return PageType.CHAPTER_START
+            return (PageType.CHAPTER_START, None)
 
     # 15. 图片为主页
     if _calculate_visual_area_ratio(blocks, page_w, page_h) >= IMAGE_DOMINANT_AREA_RATIO:
-        return PageType.IMAGE_DOMINANT
+        return (PageType.IMAGE_DOMINANT, None)
 
     # 16. 默认：正文页
-    return PageType.BODY
+    return (PageType.BODY, None)
 
 
 def _is_title_or_text_dominant(blocks: List[Dict], keywords: List[str]) -> bool:
@@ -490,6 +645,7 @@ def classify_all_pages(pdf_info_list: List[Dict]) -> None:
     """为 pdf_info_list 中的每个页面推断并设置 page_type。
 
     直接在每个 page_info 字典上增加 'page_type' 字段，原地修改。
+    若检测到混合类型页面，同时增加 'page_type_secondary' 字段。
 
     Args:
         pdf_info_list: 页面信息列表（middle.json 中的 pdf_info 数组）
@@ -500,7 +656,9 @@ def classify_all_pages(pdf_info_list: List[Dict]) -> None:
     # 文档级正文起始页：目录后一页；无目录时用章标题回退
     body_start = _detect_body_start(pdf_info_list, toc_pages)
     for idx, page_info in enumerate(pdf_info_list):
-        page_type = infer_page_type(
+        primary_type, secondary_type = infer_page_type(
             page_info, idx, total_pages, toc_pages=toc_pages, body_start=body_start
         )
-        page_info["page_type"] = page_type
+        page_info["page_type"] = primary_type
+        if secondary_type:
+            page_info["page_type_secondary"] = secondary_type
