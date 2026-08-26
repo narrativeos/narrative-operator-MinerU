@@ -266,6 +266,44 @@ python3 scripts/reclassify_page_type.py <hybrid_auto_dir>
 
 ---
 
+## 十、v2.2 乱码 block 自动清洗（OCR 装饰符号噪声）
+
+### 10.1 问题
+
+某些 PDF 的装饰性符号（页边花体、分隔符等）会被 OCR 误识别为 `! " # $ %`
+之类的纯符号串，并被布局模型标成 `title`，最终在 markdown 中呈现为：
+
+- 横向：`## ! " # $ %`（目录页）
+- 纵向：`# !` / `"` / `#` / `\$` / `%`（竖排 5 行，章节起始页左侧装饰）
+
+典型案例：《出版学基础》正文共 **9 处**乱码 block（3 处横向 + 6 处纵向）。
+
+### 10.2 修复
+
+新增 `remove_garbled_blocks()`（`mineru/backend/pipeline/page_type_classifier.py`），
+按"纯符号"特征识别乱码 block（**无中文、无字母数字、去空白后长度 ≥ 3**），
+并在三个 backend（pipeline / hybrid / vlm）的 `finalize_middle_json*` 入口**开头**调用，
+使后续 para 构建、标题分级、页面类型分类都基于干净的 block。
+
+> 真正的文本 block 必含中文/字母/数字，故该规则不会误删正常内容（页码、正文、标题均保留）。
+
+### 10.3 效果
+
+- **重新跑 OCR**：乱码 block 在 finalize 阶段自动删除，middle.json / content_list / markdown 三个输出均干净，无需手动后处理。
+- **已有输出**：可用独立脚本原地清洗（同步更新三个文件）：
+
+```bash
+python3 scripts/clean_garbled_blocks.py <hybrid_auto_dir>
+```
+
+| 输出文件 | 重新跑 OCR | 已有输出（脚本） |
+|----------|-----------|------------------|
+| middle.json | finalize 阶段自动删除 | 按 block_id 删除 |
+| content_list_v2.json | 随 middle.json 自动生成 | 按 block_id 删除 |
+| markdown | 随 middle.json 自动生成 | 正则删除乱码行 |
+
+---
+
 ## 八、联系信息
 
 如有问题，请联系 MinerU 开发团队。

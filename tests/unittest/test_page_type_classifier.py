@@ -12,6 +12,8 @@ from mineru.backend.pipeline.page_type_classifier import (
     _detect_toc_page_set,
     _page_is_magazine_toc,
     _count_magazine_toc_lines_in_page,
+    _is_garbled_block_text,
+    remove_garbled_blocks,
 )
 from mineru.utils.enum_class import BlockType, PageType
 
@@ -399,6 +401,75 @@ class TestCopyrightColophonStructuredSignal(unittest.TestCase):
         page_info = self._make_page_info(blocks)
         result = infer_page_type(page_info, 2, 10)
         _assert_page_type(result, PageType.TOC, PageType.COPYRIGHT)
+
+
+class TestGarbledBlockRemoval(unittest.TestCase):
+    """乱码 block 识别与删除（OCR 误识别的纯符号装饰符）。"""
+
+    def _make_block(self, content, btype=BlockType.TITLE):
+        return {
+            "type": btype,
+            "bbox": [100, 100, 300, 120],
+            "lines": [{"spans": [{"content": content}]}],
+        }
+
+    def test_is_garbled_horizontal(self):
+        # 横向乱码：! " # $ %
+        self.assertTrue(_is_garbled_block_text('! " # $ %'))
+
+    def test_is_garbled_vertical(self):
+        # 纵向乱码：! " # $ % 各占一行
+        self.assertTrue(_is_garbled_block_text('!\r\n"\r\n#\r\n$\r\n%'))
+
+    def test_not_garbled_chinese(self):
+        self.assertFalse(_is_garbled_block_text("出版学基础理论"))
+
+    def test_not_garbled_english(self):
+        self.assertFalse(_is_garbled_block_text("Copyright 2024"))
+
+    def test_not_garbled_page_number(self):
+        # 页码（纯数字）不应被删
+        self.assertFalse(_is_garbled_block_text("123"))
+
+    def test_not_garbled_short_symbols(self):
+        # 去空白后长度 < 3 的符号串不视为乱码
+        self.assertFalse(_is_garbled_block_text('!'))
+        self.assertFalse(_is_garbled_block_text('"'))
+        self.assertFalse(_is_garbled_block_text('! '))
+        self.assertFalse(_is_garbled_block_text("   "))
+
+    def test_remove_garbled_blocks(self):
+        pdf_info = [
+            {
+                "preproc_blocks": [
+                    self._make_block("第一章 出版学", BlockType.TITLE),
+                    self._make_block('! " # $ %', BlockType.TITLE),
+                    self._make_block("正文内容……", BlockType.TEXT),
+                ]
+            },
+            {
+                "preproc_blocks": [
+                    self._make_block('!\r\n"\r\n#\r\n$\r\n%', BlockType.TITLE),
+                    self._make_block("第二节 出版活动", BlockType.TITLE),
+                ]
+            },
+        ]
+        removed = remove_garbled_blocks(pdf_info)
+        self.assertEqual(removed, 2)
+        # 第一页保留 2 个正常 block
+        self.assertEqual(len(pdf_info[0]["preproc_blocks"]), 2)
+        # 第二页保留 1 个正常 block
+        self.assertEqual(len(pdf_info[1]["preproc_blocks"]), 1)
+        # 乱码 block 已被删除
+        all_texts = [
+            "".join(sp["content"] for l in b["lines"] for sp in l["spans"])
+            for page in pdf_info
+            for b in page["preproc_blocks"]
+        ]
+        self.assertNotIn('! " # $ %', all_texts)
+
+    def test_remove_garbled_blocks_empty(self):
+        self.assertEqual(remove_garbled_blocks([]), 0)
 
 
 if __name__ == "__main__":

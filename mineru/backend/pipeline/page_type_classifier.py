@@ -364,6 +364,42 @@ def _block_text(block: Dict) -> str:
     )
 
 
+def _is_garbled_block_text(text: str) -> bool:
+    """纯符号乱码：无中文、无字母数字、去空白后长度 >= 3。
+
+    OCR 常把 PDF 装饰性符号（页边花体、分隔符）误识别为 `! " # $ %`
+    之类的纯符号串。真正的文本 block 必含中文/字母/数字，故该规则
+    不会误删正常内容。
+    """
+    s = text.strip()
+    if len(s) < 3:
+        return False
+    if any("\u4e00" <= c <= "\u9fff" for c in s):
+        return False
+    if any(c.isalnum() for c in s):
+        return False
+    return True
+
+
+def remove_garbled_blocks(pdf_info_list: List[Dict]) -> int:
+    """删除 preproc_blocks 中的纯符号乱码 block（OCR 误识别的装饰符号）。
+
+    应在所有 block 后处理之前调用，使后续 para 构建、标题分级、页面类型
+    分类都基于干净的 block。原地修改 pdf_info_list，返回删除的 block 数。
+    """
+    removed = 0
+    for page_info in pdf_info_list:
+        blocks = page_info.get("preproc_blocks", [])
+        kept = []
+        for block in blocks:
+            if _is_garbled_block_text(_block_text(block)):
+                removed += 1
+            else:
+                kept.append(block)
+        page_info["preproc_blocks"] = kept
+    return removed
+
+
 def _is_large_centered_title(blocks: List[Dict], page_w: float) -> bool:
     """是否有大号居中标题（封面特征）：bbox 归一化后居中且宽度足够。"""
     title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}

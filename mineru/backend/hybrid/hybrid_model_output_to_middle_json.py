@@ -14,7 +14,10 @@ from mineru.backend.utils.para_block_utils import (
     iter_block_spans,
     merge_para_text_blocks,
 )
-from mineru.backend.pipeline.page_type_classifier import classify_all_pages
+from mineru.backend.pipeline.page_type_classifier import (
+    classify_all_pages,
+    remove_garbled_blocks,
+)
 from mineru.utils.enum_class import ContentType as MineruContentType
 from mineru.backend.hybrid.hybrid_magic_model import MagicModel
 from mineru.backend.utils.runtime_utils import cross_page_table_merge
@@ -315,6 +318,7 @@ def apply_server_side_postprocess(
 
 def finalize_middle_json_from_preproc(pdf_info_list, effort="medium"):
     """从 Hybrid preproc_blocks 执行完整 finalize，供服务端完整路径和客户端复用。"""
+    remove_garbled_blocks(pdf_info_list)
     build_para_blocks_from_preproc(pdf_info_list)
     merge_para_text_blocks(
         pdf_info_list,

@@ -16,7 +16,10 @@ from mineru.backend.pipeline.model_init import (
     run_ocr_inference,
 )
 from mineru.backend.pipeline.para_split import para_split
-from mineru.backend.pipeline.page_type_classifier import classify_all_pages
+from mineru.backend.pipeline.page_type_classifier import (
+    classify_all_pages,
+    remove_garbled_blocks,
+)
 from mineru.utils.cut_image import cut_image_and_table
 from mineru.utils.enum_class import ContentType, BlockType
 from mineru.utils.title_level_postprocess import apply_title_leveling_to_pdf_info
@@ -229,6 +232,7 @@ def apply_server_side_postprocess(pdf_info_list, lang=None):
 
 def finalize_middle_json_from_preproc(pdf_info_list):
     """从 preproc_blocks 执行确定性 finalize，供服务端完整路径和客户端复用。"""
+    remove_garbled_blocks(pdf_info_list)
     optimize_formula_number_blocks(pdf_info_list)
     para_split(pdf_info_list)
     cross_page_table_merge(pdf_info_list)

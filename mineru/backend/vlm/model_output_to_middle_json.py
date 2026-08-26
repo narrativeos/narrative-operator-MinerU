@@ -20,7 +20,10 @@ from mineru.utils.hash_utils import bytes_md5
 from mineru.utils.title_level_postprocess import apply_title_leveling_to_pdf_info
 from mineru.utils.pdfium_guard import close_pdfium_child, close_pdfium_document, pdfium_guard
 from mineru.version import __version__
-from mineru.backend.pipeline.page_type_classifier import classify_all_pages
+from mineru.backend.pipeline.page_type_classifier import (
+    classify_all_pages,
+    remove_garbled_blocks,
+)
 
 
 def _propagate_vlm_img_path(page_blocks: list, all_spans: list, width: int, height: int) -> None:
@@ -173,6 +176,7 @@ def append_page_blocks_to_middle_json(
 
 def finalize_middle_json(pdf_info_list):
     """从 VLM preproc_blocks 执行完整 finalize，客户端和服务端完整路径共用。"""
+    remove_garbled_blocks(pdf_info_list)
     build_para_blocks_from_preproc(pdf_info_list)
     merge_para_text_blocks(pdf_info_list)
 
