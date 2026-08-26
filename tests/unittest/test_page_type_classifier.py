@@ -318,5 +318,88 @@ class TestPrefaceCoverEnhancement(unittest.TestCase):
         _assert_page_type(result, PageType.PREFACE)
 
 
+class TestCopyrightColophonStructuredSignal(unittest.TestCase):
+    """版权/版本记录页改为"结构化元数据信号"判定的单测。
+
+    背景：出版类书籍正文中"版权/著作权/印刷/开本"等通用词高频出现，
+    仅凭关键词会把大量正文页误判为 copyright/colophon（《出版学基础》正文
+    曾出现 67 版权 + 140 版本记录误判）。现要求出现结构化元数据信号才判定。
+    """
+
+    def _make_page_info(self, blocks, page_size=(800, 1000)):
+        return {"preproc_blocks": blocks, "page_size": list(page_size)}
+
+    def test_body_page_mentioning_copyright_word(self):
+        # 正文中"版权/著作权/版权所有"高频出现，但无 ISBN/CIP/定价/© → 仍为正文
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 300], "lines": [{"spans": [{"content": "版权贸易是出版业的重要组成部分，版权保护意识日益增强。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 350, 700, 550], "lines": [{"spans": [{"content": "著作权法对出版物的保护范围作出了明确规定，出版单位应当尊重著作权。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 600, 700, 800], "lines": [{"spans": [{"content": "版权所有是出版合同中的常见条款，涉及版权归属与利益分配。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 5, 20)
+        _assert_page_type(result, PageType.BODY)
+
+    def test_body_page_mentioning_printing_words(self):
+        # 正文中"印刷/开本/印张/字数"以散文形式出现（非"标签: 值"）→ 仍为正文
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 300], "lines": [{"spans": [{"content": "印刷技术是出版业的基础，平版印刷是最常用的印刷方式。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 350, 700, 550], "lines": [{"spans": [{"content": "开本的设计影响图书的版式与阅读体验，印张数决定了用纸量。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 600, 700, 800], "lines": [{"spans": [{"content": "字数与印张共同影响图书的成本核算，这是出版管理的重要内容。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 5, 20)
+        _assert_page_type(result, PageType.BODY)
+
+    def test_real_copyright_page(self):
+        # 真实版权页：含 ISBN + CIP + 定价 等结构化元数据 → copyright
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{"content": "图书在版编目（CIP）数据\n出版学基础／方卿等编著．－武汉：武汉大学出版社，2020.1\nISBN 978-7-307-20000-0\n出版发行 武汉大学出版社\n地址 湖北省武汉市珞珈山 邮编 430072\n定价 68.00元"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 1, 10)
+        _assert_page_type(result, PageType.COPYRIGHT)
+
+    def test_copyright_isbn_only(self):
+        # 仅含 ISBN（后跟数字）也足以判定为版权页
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{"content": "ISBN 978-7-307-20000-0"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 1, 10)
+        _assert_page_type(result, PageType.COPYRIGHT)
+
+    def test_real_colophon_page(self):
+        # 真实版本记录页：含 版次/印次/印数/开本/印张/字数 等"标签: 值"元数据 → colophon
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{"content": "版次 2020年1月第1版\n印次 2020年1月第1次印刷\n印数 1-5000册\n开本 787mm×1092mm 1/16\n印张 15.5\n字数 300千字"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 1, 10)
+        _assert_page_type(result, PageType.COLOPHON)
+
+    def test_colophon_needs_multiple_fields(self):
+        # 仅 1-2 个"标签: 值"字段不足以判定为版本记录页 → 正文
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 300], "lines": [{"spans": [{"content": "本书开本 787mm，印张 15.5。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 350, 700, 550], "lines": [{"spans": [{"content": "这是关于图书装帧设计的正文段落，讨论版式与纸张的选择。"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 600, 700, 800], "lines": [{"spans": [{"content": "继续阅读正文内容，了解出版流程的各个环节。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 5, 20)
+        _assert_page_type(result, PageType.BODY)
+
+    def test_magazine_toc_with_copyright(self):
+        # 杂志目录页 + 版权信息（ISSN）→ 主类型 TOC，次要类型 COPYRIGHT（保留既有行为）
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100], "lines": [{"spans": [{"content": "专题 Feature"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 150, 700, 500], "lines": [{"spans": [{"content": "010 京沪高铁让旅客出行更美好\n012 铁路客票便民惠旅新升级\n014 高铁上看风景好\n016 高邮活虾鲜\n018 山城步道游"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 700, 700, 900], "lines": [{"spans": [{"content": "ISSN: 1000-0000\n印刷单位：北京盛通印刷股份有限公司"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 2, 10)
+        _assert_page_type(result, PageType.TOC, PageType.COPYRIGHT)
+
+
 if __name__ == "__main__":
     unittest.main()

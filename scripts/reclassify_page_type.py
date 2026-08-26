@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""原地更新 middle.json 的 page_type 字段（用增强后的 classify_all_pages）。
+"""原地更新 MinerU 输出的 page_type 字段（用增强后的 classify_all_pages）。
+
+同步更新 middle.json + content_list_v2.json + markdown，使页面类型标注一致。
+（page_type 由 middle.json 派生并传播到 content_list 与 markdown，故需一并更新。）
 
 用法（需非沙箱执行，写 ~/.TraceView）:
-    python3 scripts/reclassify_page_type.py
+    python3 scripts/reclassify_page_type.py <hybrid_auto_dir>
+
+例如:
+    python3 scripts/reclassify_page_type.py \
+        ~/.TraceView/出版学基础正文/mineru/<book>/hybrid_auto
 """
 import json
 import os
+import re
 import shutil
 import sys
 from collections import Counter
@@ -14,28 +22,100 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from mineru.backend.pipeline.page_type_classifier import classify_all_pages
 
-TARGET = os.path.expanduser(
-    "~/.TraceView/978-7-111-74324-8_1-1_2/mineru/978-7-111-74324-8_1-1_2/hybrid_auto"
-)
-MIDDLE = os.path.join(TARGET, "978-7-111-74324-8_1-1_2_middle.json")
-BAK = MIDDLE + ".page_type_bak"
 
-GT_TOC = set(range(12, 23))
+def _find_file(directory, suffix):
+    """在目录顶层查找以 suffix 结尾的文件（兼容 MIME 编码文件名前缀）。"""
+    for name in sorted(os.listdir(directory)):
+        if name.endswith(suffix) and os.path.isfile(os.path.join(directory, name)):
+            return os.path.join(directory, name)
+    return None
+
+
+def _backup(path):
+    bak = path + ".page_type_bak"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+        print(f"[ok] backed up to {bak}")
+    else:
+        print(f"[warn] backup already exists, skipping: {bak}")
+
+
+def _update_content_list_v2(clv2_path, pi):
+    """根据重分类后的 middle.json 页面类型，同步更新 content_list_v2.json。"""
+    with open(clv2_path) as f:
+        clv2 = json.load(f)
+    if len(clv2) != len(pi):
+        print(f"[warn] content_list_v2 页数({len(clv2)}) != middle.json 页数({len(pi)})，跳过")
+        return
+    changed = 0
+    for i, page in enumerate(clv2):
+        new_type = pi[i].get("page_type")
+        new_secondary = pi[i].get("page_type_secondary")
+        if page.get("page_type") != new_type:
+            changed += 1
+        page["page_type"] = new_type
+        if new_secondary:
+            page["page_type_secondary"] = new_secondary
+        elif "page_type_secondary" in page:
+            del page["page_type_secondary"]
+        for block in page.get("contents", []):
+            block["page_type"] = new_type
+            if new_secondary:
+                block["page_type_secondary"] = new_secondary
+            elif "page_type_secondary" in block:
+                del block["page_type_secondary"]
+    with open(clv2_path, "w") as f:
+        json.dump(clv2, f, ensure_ascii=False)
+    print(f"[ok] updated content_list_v2: {clv2_path} ({changed} 页级变化)")
+
+
+def _update_markdown(md_path, pi):
+    """根据重分类后的 middle.json 页面类型，同步更新 markdown 的 page_type 注释。"""
+    with open(md_path) as f:
+        md = f.read()
+    comments = re.findall(r"<!--\s*page_type:[^>]*-->", md)
+    if len(comments) != len(pi):
+        print(f"[warn] markdown page_type 注释数({len(comments)}) != middle.json 页数({len(pi)})，跳过")
+        return
+    new_comments = []
+    for p in pi:
+        t = p.get("page_type")
+        s = p.get("page_type_secondary")
+        if s:
+            new_comments.append(f"<!-- page_type: {t}; page_type_secondary: {s} -->")
+        else:
+            new_comments.append(f"<!-- page_type: {t} -->")
+    it = iter(new_comments)
+    md_new = re.sub(r"<!--\s*page_type:[^>]*-->", lambda _m: next(it), md)
+    with open(md_path, "w") as f:
+        f.write(md_new)
+    print(f"[ok] updated markdown: {md_path} ({len(new_comments)} 注释)")
 
 
 def main():
-    if not os.path.exists(MIDDLE):
-        print(f"[error] middle.json not found: {MIDDLE}")
+    if len(sys.argv) < 2:
+        print(__doc__)
+        print("[error] 请提供 hybrid_auto 目录路径")
+        sys.exit(1)
+    target = os.path.expanduser(sys.argv[1])
+    if not os.path.isdir(target):
+        print(f"[error] 目录不存在: {target}")
         sys.exit(1)
 
-    # 备份
-    if not os.path.exists(BAK):
-        shutil.copy2(MIDDLE, BAK)
-        print(f"[ok] backed up to {BAK}")
-    else:
-        print(f"[warn] backup already exists, skipping: {BAK}")
+    middle = _find_file(target, "_middle.json")
+    clv2 = _find_file(target, "_content_list_v2.json")
+    md = _find_file(target, ".md")
+    if not middle:
+        print(f"[error] 未找到 *_middle.json: {target}")
+        sys.exit(1)
 
-    with open(MIDDLE) as f:
+    _backup(middle)
+    if clv2:
+        _backup(clv2)
+    if md:
+        _backup(md)
+
+    with open(middle) as f:
         m = json.load(f)
     pi = m["pdf_info"]
 
@@ -56,18 +136,21 @@ def main():
     for pg, old, new in changed:
         print(f"  p{pg}: {old} -> {new}")
 
-    # GT TOC check
-    toc_pages = {i+1 for i, p in enumerate(pi) if p.get("page_type") == "toc"}
-    tp = toc_pages & GT_TOC
-    print(f"\n[toc recall] {len(tp)}/{len(GT_TOC)} pages: {sorted(tp)}")
-    fp = toc_pages - GT_TOC
-    if fp:
-        print(f"[toc false+] {sorted(fp)}")
-
-    # 写回
-    with open(MIDDLE, "w") as f:
+    # 写回 middle.json
+    with open(middle, "w") as f:
         json.dump(m, f, ensure_ascii=False)
-    print(f"\n[ok] updated: {MIDDLE}")
+    print(f"\n[ok] updated middle.json: {middle}")
+
+    if clv2:
+        _update_content_list_v2(clv2, pi)
+    else:
+        print("[warn] 未找到 *_content_list_v2.json，跳过")
+    if md:
+        _update_markdown(md, pi)
+    else:
+        print("[warn] 未找到 .md，跳过")
+
+    print("\n[done]")
 
 
 if __name__ == "__main__":

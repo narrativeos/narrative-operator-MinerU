@@ -112,6 +112,28 @@ _STRICT_COLOPHON_KEYWORDS = [
     "版次", "印张", "collophon", "printing", "出版日期",
 ]
 
+# ─── 版权页/版本记录页结构化信号 ───────────────────────────────────────
+# 真正的版权页/版本记录页由"结构化元数据"定义，而非单个通用词。
+# 通用词（版权/著作权/印刷/开本等）在出版类书籍正文中高频出现，
+# 仅凭关键词会出现大量误判（如《出版学基础》正文：67 版权 + 140 版本记录误判）。
+
+# 版权页强信号：ISBN 后跟数字 / CIP 数据 / 定价+元 / ©
+_ISBN_PATTERN = re.compile(r"ISBN\s*[:：]?\s*\d", re.IGNORECASE)
+_CIP_PATTERN = re.compile(r"图书在版编目|CIP\s*数据", re.IGNORECASE)
+_PRICE_PATTERN = re.compile(r"定价\s*[:：]?\s*[\d.]+\s*元")
+
+# 版本记录页字段（"标签: 值"元数据格式，避免正文中"开本/印张"等词误触发）
+_COLOPHON_FIELD_PATTERNS = [
+    re.compile(r"印次\s*[:：]?\s*\d"),
+    re.compile(r"印数\s*[:：]?\s*[\d.]+"),
+    re.compile(r"开本\s*[:：]?\s*[\d一二三四五六七八九十大中小]"),
+    re.compile(r"印张\s*[:：]?\s*[\d.]+"),
+    re.compile(r"字数\s*[:：]?\s*[\d.]+"),
+    re.compile(r"版次\s*[:：]?\s*\d"),
+]
+# 版本记录页判定所需的最少"标签: 值"字段数
+COLOPHON_MIN_FIELDS = 3
+
 # 目录页页眉关键词
 _TOC_HEADER_PATTERN = re.compile(r"目\s*录|CONTENTS", re.IGNORECASE)
 
@@ -229,6 +251,33 @@ def _has_strict_colophon_in_non_toc_blocks(page_info: Dict) -> bool:
         if _contains_keyword(block_text, _STRICT_COLOPHON_KEYWORDS):
             return True
     return False
+
+
+def _is_copyright_page(block_text: str) -> bool:
+    """判断是否为版权页：需至少一个结构化强信号。
+
+    仅凭"版权/著作权/版权所有"等通用词不足以判定（出版类书籍正文高频出现），
+    必须出现 ISBN/CIP/定价/© 等结构化元数据信号。
+    """
+    if _ISBN_PATTERN.search(block_text):
+        return True
+    if _CIP_PATTERN.search(block_text):
+        return True
+    if _PRICE_PATTERN.search(block_text):
+        return True
+    if "©" in block_text:
+        return True
+    return False
+
+
+def _is_colophon_page(block_text: str) -> bool:
+    """判断是否为版本记录页：需 ≥ COLOPHON_MIN_FIELDS 个"标签: 值"元数据字段。
+
+    仅凭"印刷/开本/印张"等通用词不足以判定（出版类书籍正文高频出现），
+    必须出现多个"标签: 值"格式的元数据字段（如 版次 2020 / 印张 15.5）。
+    """
+    count = sum(1 for pat in _COLOPHON_FIELD_PATTERNS if pat.search(block_text))
+    return count >= COLOPHON_MIN_FIELDS
 
 
 def _page_has_toc_header(page_info: Dict) -> bool:
@@ -500,14 +549,16 @@ def infer_page_type(
     is_index_toc = (len(blocks) > 0 and index_count / len(blocks) >= TOC_INDEX_RATIO_THRESHOLD)
     is_toc = is_toc_in_set or is_index_toc or is_mag_toc
 
-    # 版权/版本记录检测：对于杂志TOC页面使用更严格的检测，
-    # 避免板块标题中的英文词（如"印象Impression"）误触发
+    # 版权/版本记录检测：
+    # - 杂志TOC页：沿用严格关键词检测（避免板块标题误触发，保留 TOC+版权 混合页判定）
+    # - 普通页：基于结构化元数据信号（ISBN/CIP/定价/© 及 版本记录字段），
+    #   避免出版类书籍正文中"版权/著作权/印刷/开本"等通用词导致的大量误判
     if is_mag_toc:
         has_copyright = _has_strict_copyright_in_non_toc_blocks(page_info)
         has_colophon = _has_strict_colophon_in_non_toc_blocks(page_info)
     else:
-        has_copyright = _contains_keyword(block_text, COPYRIGHT_KEYWORDS)
-        has_colophon = _contains_keyword(block_text, COLOPHON_KEYWORDS)
+        has_copyright = _is_copyright_page(block_text)
+        has_colophon = _is_colophon_page(block_text)
 
     # 1. 空白页
     if len(blocks) <= BLANK_BLOCK_THRESHOLD:
@@ -662,3 +713,6 @@ def classify_all_pages(pdf_info_list: List[Dict]) -> None:
         page_info["page_type"] = primary_type
         if secondary_type:
             page_info["page_type_secondary"] = secondary_type
+        else:
+            # 清除上一次分类遗留的次要类型，避免陈旧值残留
+            page_info.pop("page_type_secondary", None)
