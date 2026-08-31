@@ -10,10 +10,17 @@ from mineru.backend.pipeline.page_type_classifier import (
     _calculate_visual_area_ratio,
     _count_toc_lines_in_page,
     _detect_toc_page_set,
+    _detect_body_start,
     _page_is_magazine_toc,
     _count_magazine_toc_lines_in_page,
+    _page_has_toc_header,
+    _strip_inline_tags,
+    _normalize_cjk_whitespace,
+    _detect_foreword_pages,
     _is_garbled_block_text,
     remove_garbled_blocks,
+    _TOC_LINE_PATTERN,
+    _MAGAZINE_TOC_LINE_PATTERN,
 )
 from mineru.utils.enum_class import BlockType, PageType
 
@@ -470,6 +477,201 @@ class TestGarbledBlockRemoval(unittest.TestCase):
 
     def test_remove_garbled_blocks_empty(self):
         self.assertEqual(remove_garbled_blocks([]), 0)
+
+
+class TestGbStandardTocFixes(unittest.TestCase):
+    """国标目录/正文起始检测修复（目次页眉、括号页码、编号列表防误判）。"""
+
+    def _make_page_info(self, blocks, page_size=(800, 1000)):
+        return {"preproc_blocks": blocks, "page_size": list(page_size)}
+
+    def test_toc_header_recognizes_muci(self):
+        # 国标目录页眉为"目次"（非"目录"）
+        page_info = self._make_page_info([
+            {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+             "lines": [{"spans": [{"content": "目次"}]}]},
+        ])
+        self.assertTrue(_page_has_toc_header(page_info))
+
+    def test_toc_line_pattern_paren_page_number(self):
+        # 国标目录行页码带括号："1 总 则 …… (1)"
+        self.assertTrue(_TOC_LINE_PATTERN.search("1 总 则 …… (1)"))
+        self.assertTrue(_TOC_LINE_PATTERN.search("25 接地装置 …… (69)"))
+        # 普通目录行仍匹配
+        self.assertTrue(_TOC_LINE_PATTERN.search("第一章 出版学 …… 3"))
+
+    def test_magazine_pattern_excludes_list_items(self):
+        # 正文编号列表项（行尾列表标点）不算目录行
+        self.assertFalse(_MAGAZINE_TOC_LINE_PATTERN.search("19 测量轴电压；"))
+        self.assertFalse(_MAGAZINE_TOC_LINE_PATTERN.search("15 测量噪音。"))
+        # 杂志目录行仍匹配
+        self.assertTrue(_MAGAZINE_TOC_LINE_PATTERN.search("070 黔味越山海，酸香漫京城"))
+        self.assertTrue(_MAGAZINE_TOC_LINE_PATTERN.search("010京沪高铁，让旅客出行更美好"))
+
+    def test_strip_inline_tags(self):
+        self.assertEqual(_strip_inline_tags("测量轴电压<sub>；</sub>"), "测量轴电压；")
+        self.assertEqual(_strip_inline_tags("GB50150<sub>-</sub>2016"), "GB50150-2016")
+
+    def test_count_toc_lines_ignores_numbered_list_page(self):
+        # 正文编号列表项（行尾列表标点"；/。"）不应计为目录行
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                "content": "19 测量轴电压；\n20 定子绕组端部动态特性测试；\n21 转子通风试验；\n22 水流量试验。"
+            }]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        self.assertEqual(_count_toc_lines_in_page(page_info), 0)
+
+    def test_body_start_not_polluted_by_body_toc_false_positive(self):
+        # 正文区编号列表密集页（第5页）不应把 body_start 推后
+        pdf_info = [
+            self._make_page_info([
+                {"type": BlockType.DOC_TITLE, "bbox": [100, 100, 700, 200],
+                 "lines": [{"spans": [{"content": "某标准封面"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                    "content": "1 总 则 …… (1)\n2 术 语 …… (2)\n3 基本规定 …… (4)"
+                }]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                    "content": "4 同步发电机 …… (7)\n5 直流电机 …… (16)"
+                }]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "1 总则"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "为适应需要，制定本标准。"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                    "content": "10 测量绝缘电阻；\n11 测量直流电阻；\n12 交流耐压试验；\n13 密封性试验；\n14 气体密度检查"
+                }]}]},
+            ]),
+        ]
+        toc_pages = _detect_toc_page_set(pdf_info)
+        self.assertEqual(toc_pages, {2, 3})
+        self.assertEqual(_detect_body_start(pdf_info, toc_pages), 4)
+
+
+class TestStandardFrontMatterPages(unittest.TestCase):
+    """标准类前置页新枚举（扉页/公告/出版信息/前言/引用标准）。"""
+
+    def _make_page_info(self, blocks, page_size=(800, 1000)):
+        return {"preproc_blocks": blocks, "page_size": list(page_size)}
+
+    def test_title_page(self):
+        # 国标扉页：标准名称 + 主编/批准部门 + 施行日期
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [100, 80, 700, 130],
+             "lines": [{"spans": [{"content": "中华人民共和国国家标准"}]}]},
+            {"type": BlockType.TITLE, "bbox": [100, 200, 700, 300],
+             "lines": [{"spans": [{"content": "电气装置安装工程电气设备交接试验标准"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 400, 700, 450],
+             "lines": [{"spans": [{"content": "GB 50 1 50 - 20 1 6"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 500, 700, 550],
+             "lines": [{"spans": [{"content": "主编部门：中国电力企业联合会"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 600, 700, 650],
+             "lines": [{"spans": [{"content": "批准部门：中华人民共和国住房和城乡建设部"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 700, 700, 750],
+             "lines": [{"spans": [{"content": "施行日期：2016年12月1日"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 1, 20, toc_pages=set(), body_start=12)
+        _assert_page_type(result, PageType.TITLE_PAGE)
+
+    def test_announcement_page(self):
+        # 发布公告页：标题含"公告" + "第X号"（OCR 数字间空格）
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [100, 80, 700, 130],
+             "lines": [{"spans": [{"content": "中华人民共和国住房和城乡建设部公告"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 200, 700, 250],
+             "lines": [{"spans": [{"content": "第 1 093 号"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 300, 700, 700],
+             "lines": [{"spans": [{"content": "现批准《电气装置安装工程电气设备交接试验标准》为国家标准。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 3, 20, toc_pages=set(), body_start=12)
+        _assert_page_type(result, PageType.ANNOUNCEMENT)
+
+    def test_publication_info_page(self):
+        # 出版信息页：出版发行 + 标准编号 + 地址/印张/网址 等字段
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 150],
+             "lines": [{"spans": [{"content": "GB50150-2016"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 200, 700, 250],
+             "lines": [{"spans": [{"content": "中国计划出版社出版发行"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 300, 700, 350],
+             "lines": [{"spans": [{"content": "网址：www.jhpress.com"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 400, 700, 450],
+             "lines": [{"spans": [{"content": "地址 北京市西城区木樨地北里甲11号"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 500, 700, 550],
+             "lines": [{"spans": [{"content": "850mm×1168mm 1/32 5.75印张 144千字"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 2, 20, toc_pages=set(), body_start=12)
+        _assert_page_type(result, PageType.PUBLICATION_INFO)
+
+    def test_book_copyright_page_stays_copyright(self):
+        # 书籍版权页（无标准编号）不受 publication_info 规则影响，仍为 copyright
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                "content": "出版发行 武汉大学出版社\n地址 湖北省武汉市珞珈山\n定价 68.00元\nISBN 978-7-307-20000-0"
+            }]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 1, 10, toc_pages=set(), body_start=10)
+        _assert_page_type(result, PageType.COPYRIGHT)
+
+    def test_foreword_range_includes_continuation_pages(self):
+        # 前言区间：含"前言"标题页 + 后续续页（修订说明/起草单位）
+        pdf_info = [
+            self._make_page_info([
+                {"type": BlockType.DOC_TITLE, "bbox": [100, 100, 700, 200],
+                 "lines": [{"spans": [{"content": "某标准"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 80, 700, 130],
+                 "lines": [{"spans": [{"content": "前言"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 200, 700, 900],
+                 "lines": [{"spans": [{"content": "本标准是根据相关通知制定的。"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900],
+                 "lines": [{"spans": [{"content": "主要起草人：张三 李四 王五"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "1 总则"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "为适应需要，制定本标准。"}]}]},
+            ]),
+        ]
+        toc_pages = _detect_toc_page_set(pdf_info)
+        body_start = _detect_body_start(pdf_info, toc_pages)
+        self.assertEqual(body_start, 4)
+        self.assertEqual(_detect_foreword_pages(pdf_info, toc_pages, body_start), {2, 3})
+
+    def test_normative_references_page(self):
+        # 引用标准章（标题"引用标准名录"）→ normative_references
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+             "lines": [{"spans": [{"content": "引用标准名录"}]}]},
+            {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+             "lines": [{"spans": [{"content": "下列文件对于本文件的应用是必不可少的。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 5, 20)
+        _assert_page_type(result, PageType.NORMATIVE_REFERENCES)
+
+    def test_contains_keyword_cjk_whitespace(self):
+        # OCR 在中文词内插空格（"术 语"）不应导致关键词失配
+        self.assertTrue(_contains_keyword("2 术 语", ["术语"]))
+        self.assertEqual(_normalize_cjk_whitespace("总 则"), "总则")
+        # 英文/数字间空白不受影响
+        self.assertEqual(_normalize_cjk_whitespace("GB 50150"), "GB 50150")
 
 
 if __name__ == "__main__":

@@ -142,10 +142,14 @@ class PageType:
     # 封面相关
     COVER = "cover"                      # 封面页：文档封面，通常包含主标题、作者、日期等
     HALF_TITLE = "half_title"            # 半标题页：只有书名/文档名的简化标题页（扉页前的那页）
+    TITLE_PAGE = "title_page"            # 扉页页：标准扉页（标准名称+编号+主编/批准部门/施行日期）
+    ANNOUNCEMENT = "announcement"        # 发布公告页：主管部门发布/批准标准的公告（第X号）
+    PUBLICATION_INFO = "publication_info"  # 出版信息页：出版社/地址/印张/定价等出版元数据
     COPYRIGHT = "copyright"              # 版权页：包含版权信息、ISBN 等
     COLOPHON = "colophon"                # 版本记录页：排版/印刷信息页面
     BACK_COVER = "back_cover"            # 封底页：文档最后一页，内容稀疏
     PREFACE = "preface"                  # 前置页：序/前言/作者简介等正文前内容（front matter）
+    FOREWORD = "foreword"                # 前言页：前言/修订说明/起草单位等（含续页）
 
     # 导航相关
     TOC = "toc"                          # 目录页：以目录/索引内容为主的页面
@@ -158,6 +162,7 @@ class PageType:
     APPENDIX = "appendix"                # 附录页
     ACKNOWLEDGMENT = "acknowledgment"    # 致谢页
     REFERENCE = "reference"              # 参考文献页
+    NORMATIVE_REFERENCES = "normative_references"  # 引用标准页：规范性引用文件/引用标准
 
     # 特殊内容
     BLANK = "blank"                      # 空白页：几乎没有有效内容

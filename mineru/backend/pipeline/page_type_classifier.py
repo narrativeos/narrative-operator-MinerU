@@ -25,7 +25,9 @@ BACK_COVER_MAX_BLOCKS = 3
 TOC_INDEX_RATIO_THRESHOLD = 0.5
 
 # 目录页（行密度增强）：候选页 TOC 行阈值 / 主导区间占比 / 最短区间页数
-TOC_LINE_CANDIDATE_THRESHOLD = 3
+# 候选阈值取 2：国标目录续页（如"25 接地装置 …… (69)"）TOC 行常不足 3 行，
+# 取 2 可让续页与主目录页合并为同一区间；正文误报由"最短区间页数 + 主导区间占比"兜底。
+TOC_LINE_CANDIDATE_THRESHOLD = 2
 TOC_DOMINANT_RATIO = 0.2
 TOC_MIN_RANGE_PAGES = 2
 
@@ -79,15 +81,18 @@ INDEX_KEYWORDS = [
 # TOC 条目行模式（章节号 + 引导符 + 页码）。
 # 引导符：U+2026 省略号 / U+00B7 中圆点允许 1 个以上；ASCII '.' 仅允许 2 个以上
 # （避免把标题中的小数点如 "4.0" 误判为引导符，见 Phase 0 报告 Q3）。
+# 页码允许括号包裹（国标目录形如 "1 总 则 …… (1)"）。
 _TOC_LINE_PATTERN = re.compile(
     r"(?:第[一二三四五六七八九十百千\d]+[篇章节部]|[\d]+(?:\.[\d]+)*)\s*"
-    r".*?(?:[……·]{1,}|\.{2,})\s*[\dIVXivx]+"
+    r".*?(?:[……·]{1,}|\.{2,})\s*[（(]?\s*[\dIVXivx]+\s*[)）]?"
 )
 
 # 杂志/生活类目录行模式：页码(2-3位数字) + 可选空白 + 文章标题(至少4个非数字字符)
 # 例如: "010京沪高铁，让旅客出行更美好" (无空格), "070 黔味越山海，酸香漫京城" (有空格)
+# 注意：行尾为列表标点（；;。等）的行不算目录行 —— 正文编号列表项
+# （如 "19 测量轴电压；"）与目录行同为"数字+文字"形态，但目录条目不以列表标点结尾。
 _MAGAZINE_TOC_LINE_PATTERN = re.compile(
-    r"^\s*\d{2,3}\s?[^\d\s].{4,}"
+    r"^\s*\d{2,3}\s?[^\d\s].{4,}(?<![；;。．,，、:：!！?？])$"
 )
 
 # 杂志目录板块标题模式：中文标题 + 英文标题（空格分隔）
@@ -134,8 +139,18 @@ _COLOPHON_FIELD_PATTERNS = [
 # 版本记录页判定所需的最少"标签: 值"字段数
 COLOPHON_MIN_FIELDS = 3
 
-# 目录页页眉关键词
-_TOC_HEADER_PATTERN = re.compile(r"目\s*录|CONTENTS", re.IGNORECASE)
+# 目录页页眉关键词（国标目录页眉为"目次"，书籍为"目录"）
+_TOC_HEADER_PATTERN = re.compile(r"目\s*[录次]|CONTENTS", re.IGNORECASE)
+
+
+# OCR 输出常含 <sub>/<sup> 行内标签（如 "测量轴电压<sub>；</sub>"），
+# 行级模式匹配前需剥离，否则行尾标点检查等规则会因标签干扰而失效。
+_INLINE_TAG_PATTERN = re.compile(r"</?(?:sub|sup)>", re.IGNORECASE)
+
+
+def _strip_inline_tags(text: str) -> str:
+    """剥离 <sub>/<sup> 行内标签，还原纯文本。"""
+    return _INLINE_TAG_PATTERN.sub("", text)
 
 
 def _count_toc_lines_in_page(page_info: Dict) -> int:
@@ -146,7 +161,7 @@ def _count_toc_lines_in_page(page_info: Dict) -> int:
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 text += str(span.get("content", ""))
-        for ln in text.split("\n"):
+        for ln in _strip_inline_tags(text).split("\n"):
             if _TOC_LINE_PATTERN.search(ln):
                 total += 1
             elif _MAGAZINE_TOC_LINE_PATTERN.search(ln.strip()):
@@ -162,7 +177,7 @@ def _count_magazine_toc_lines_in_page(page_info: Dict) -> int:
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 text += str(span.get("content", ""))
-        for ln in text.split("\n"):
+        for ln in _strip_inline_tags(text).split("\n"):
             if _MAGAZINE_TOC_LINE_PATTERN.search(ln.strip()):
                 total += 1
     return total
@@ -342,9 +357,9 @@ def _detect_toc_page_set(pdf_info_list: List[Dict]) -> Set[int]:
 
 # ─── 前置页/封面增强 ───────────────────────────────────────────────────
 
-# 正文起始检测：章标题模式（第X章 / Chapter N / X.Y 开头）
+# 正文起始检测：章标题模式（第X章 / Chapter N / X.Y 开头 / 国标单级编号 "1 总则" 开头）
 _BODY_HEADING_PATTERN = re.compile(
-    r"第[一二三四五六七八九十百千\d]+章|Chapter\s+\d+|^\d+\.\d+\s",
+    r"第[一二三四五六七八九十百千\d]+章|Chapter\s+\d+|^\d+\.\d+\s|^\d{1,2}\s+\S",
     re.IGNORECASE,
 )
 
@@ -440,10 +455,138 @@ def _detect_body_start_from_headings(pdf_info_list: List[Dict]) -> int:
 
 
 def _detect_body_start(pdf_info_list: List[Dict], toc_pages: Set[int]) -> int:
-    """文档级正文起始页：目录后一页；无目录时用章标题回退。"""
-    if toc_pages:
-        return max(toc_pages) + 1
-    return _detect_body_start_from_headings(pdf_info_list)
+    """文档级正文起始页：前置目录后一页；无目录时用章标题回退。
+
+    只统计位于首个章标题之前的目录页（前置目录），避免正文区误报的
+    "目录页"（如编号列表密集的正文页）把 body_start 推后，
+    导致正文前若干页被误判为前置页/封面。
+    """
+    if not toc_pages:
+        return _detect_body_start_from_headings(pdf_info_list)
+    # 找到首个章标题时，用它排除正文区误报的目录页（只统计前置目录）
+    heading_start = _detect_body_start_from_headings(pdf_info_list)
+    if heading_start > 1:
+        front_toc = [p for p in toc_pages if p < heading_start]
+        if front_toc:
+            return min(max(front_toc) + 1, heading_start)
+    # 未找到章标题（回退哨兵值 1）时，沿用旧逻辑：目录后一页
+    return max(toc_pages) + 1
+
+
+# ─── 标准类前置页检测（扉页/公告/出版信息/前言/引用标准）──────────────
+# 国标/行标等标准文档的前置部分有固定版式，用结构化信号判定，
+# 避免落入泛化的 cover/preface 兜底。
+
+# 标准编号模式（GB/T 50150、GB50150-2016、"GB 50 1 50" 等 OCR 变体）
+_STANDARD_NO_PATTERN = re.compile(
+    r"(?:GB|JB|DL|HG|SH|NB|CJJ|CECS)\s*/?\s*T?\s*\d", re.IGNORECASE
+)
+
+# 扉页页：标准名称关键词 + 结构化字段（主编/批准部门、施行日期等）
+_TITLE_PAGE_NAME_KEYWORDS = [
+    "国家标准", "行业标准", "地方标准", "团体标准", "企业标准",
+]
+_TITLE_PAGE_FIELD_PATTERNS = [
+    re.compile(r"主编单位|主编部门|批准部门|发布部门|归口单位|起草单位"),
+    re.compile(r"施行日期|实施日期|发布日期"),
+    re.compile(r"标准编号"),
+]
+TITLE_PAGE_MIN_FIELDS = 2
+
+
+def _is_title_page(block_text: str) -> bool:
+    """判断是否为标准扉页页：标准名称 + ≥2 个结构化字段（或 1 字段+标准编号）。"""
+    if not _contains_keyword(block_text, _TITLE_PAGE_NAME_KEYWORDS):
+        return False
+    norm = _normalize_cjk_whitespace(block_text)
+    fields = sum(1 for p in _TITLE_PAGE_FIELD_PATTERNS if p.search(norm))
+    if fields >= TITLE_PAGE_MIN_FIELDS:
+        return True
+    return fields >= 1 and bool(_STANDARD_NO_PATTERN.search(norm))
+
+
+# 发布公告页：标题含"公告" + "第X号"编号（OCR 常在数字间插空格，如 "第 1 093 号"）
+_ANNOUNCEMENT_TITLE_KEYWORDS = ["公告"]
+_ANNOUNCEMENT_NO_PATTERN = re.compile(r"第\s*\d[\d\s]{0,11}号")
+
+
+def _is_announcement_page(blocks: List[Dict], block_text: str) -> bool:
+    """判断是否为发布公告页：标题 block 含"公告"且页面有"第X号"编号。"""
+    title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
+    for block in blocks:
+        if block.get("type") in title_types and _contains_keyword(
+            _block_text(block), _ANNOUNCEMENT_TITLE_KEYWORDS
+        ):
+            return bool(_ANNOUNCEMENT_NO_PATTERN.search(block_text))
+    return False
+
+
+# 出版信息页：出版发行关键词 + 标准编号 + ≥2 个出版元数据字段
+_PUB_INFO_KEYWORDS = ["出版发行", "出版社", "出版公司"]
+_PUB_INFO_FIELD_PATTERNS = [
+    re.compile(r"印\s*张"),
+    re.compile(r"定\s*价"),
+    re.compile(r"网址|www\.|http", re.IGNORECASE),
+    re.compile(r"地\s*址"),
+    re.compile(r"统一书号|ISBN", re.IGNORECASE),
+    re.compile(r"开\s*本"),
+    re.compile(r"印\s*次|印\s*数"),
+]
+PUB_INFO_MIN_FIELDS = 2
+
+
+def _is_publication_info_page(block_text: str) -> bool:
+    """判断是否为出版信息页：出版发行 + 标准编号 + ≥2 个出版元数据字段。
+
+    要求标准编号是为了与书籍版权页区分（书籍版权页无 GB/JB 等标准编号，
+    仍走 copyright/colophon 判定，保持既有行为）。
+    """
+    if not _contains_keyword(block_text, _PUB_INFO_KEYWORDS):
+        return False
+    norm = _normalize_cjk_whitespace(block_text)
+    if not _STANDARD_NO_PATTERN.search(norm):
+        return False
+    fields = sum(1 for p in _PUB_INFO_FIELD_PATTERNS if p.search(norm))
+    return fields >= PUB_INFO_MIN_FIELDS
+
+
+# 前言页标题关键词
+FOREWORD_TITLE_KEYWORDS = ["前言", "foreword"]
+
+
+def _detect_foreword_pages(
+    pdf_info_list: List[Dict],
+    toc_pages: Set[int],
+    body_start: int,
+) -> Set[int]:
+    """文档级前言页检测，返回前言页集合（1-based，含续页）。
+
+    前言从含"前言"标题的前置页开始，到目录页或正文起始页之前结束
+    （覆盖修订说明、起草单位等续页）。
+    """
+    if body_start is None:
+        return set()
+    start = None
+    for i in range(min(body_start - 1, len(pdf_info_list))):
+        blocks = pdf_info_list[i].get("preproc_blocks", [])
+        if _is_title_or_text_dominant(blocks, FOREWORD_TITLE_KEYWORDS):
+            start = i + 1
+            break
+    if start is None:
+        return set()
+    end = body_start - 1
+    later_toc = [p for p in toc_pages if p > start]
+    if later_toc:
+        end = min(end, min(later_toc) - 1)
+    if end < start:
+        return set()
+    return set(range(start, end + 1))
+
+
+# 引用标准页标题关键词（"引用标准"章，区别于"参考文献"）
+NORMATIVE_REFERENCE_KEYWORDS = [
+    "规范性引用文件", "引用标准", "引用文件", "normative references",
+]
 
 
 # ─── 辅助函数 ───────────────────────────────────────────────────────────
@@ -469,9 +612,18 @@ def _get_block_text(blocks: List[Dict]) -> str:
     return " ".join(texts)
 
 
+def _normalize_cjk_whitespace(text: str) -> str:
+    """去除 CJK 字符之间的空白。
+
+    OCR 常在中文词内部插入空格（如 "术 语"、"总 则"），导致关键词/正则
+    匹配失败。仅去除两个 CJK 字符之间的空白，不影响英文与数字排版。
+    """
+    return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+
+
 def _contains_keyword(text: str, keywords: List[str]) -> bool:
-    """检查文本是否包含任一关键词（不区分大小写）。"""
-    text_lower = text.lower()
+    """检查文本是否包含任一关键词（不区分大小写，CJK 间空白归一化）。"""
+    text_lower = _normalize_cjk_whitespace(text).lower()
     for kw in keywords:
         if kw.lower() in text_lower:
             return True
@@ -552,6 +704,7 @@ def infer_page_type(
     total_pages: int,
     toc_pages: Optional[Set[int]] = None,
     body_start: Optional[int] = None,
+    foreword_pages: Optional[Set[int]] = None,
 ) -> tuple:
     """推断单个页面的类型。
 
@@ -563,6 +716,8 @@ def infer_page_type(
             INDEX 块占比规则（保持旧调用兼容）
         body_start: 文档级正文起始页（1-based）；为 None 时禁用前置页/封面
             front-matter 判定（保持旧调用兼容）
+        foreword_pages: 文档级检测出的前言页集合（1-based，含续页）；
+            为 None 时禁用 foreword 判定（保持旧调用兼容）
 
     Returns:
         (primary_type, secondary_type) 元组。
@@ -600,9 +755,23 @@ def infer_page_type(
     if len(blocks) <= BLANK_BLOCK_THRESHOLD:
         return (PageType.BLANK, None)
 
-    # 2. 封面页（首页 + doc_title；或前置页 + 居中大标题 + 内容稀疏，排除目录页与表格页）
+    # 2a. 封面页（首页 + doc_title）
     if page_idx == 0 and _has_doc_title(blocks) and _is_content_sparse(blocks):
         return (PageType.COVER, None)
+
+    # 2b. 发布公告页（前置页 + 标题含"公告" + "第X号"编号）
+    if is_front_matter and _is_announcement_page(blocks, block_text):
+        return (PageType.ANNOUNCEMENT, None)
+
+    # 2c. 扉页页（前置页 + 标准名称 + 主编/批准/施行等结构化字段）
+    if is_front_matter and _is_title_page(block_text):
+        return (PageType.TITLE_PAGE, None)
+
+    # 2d. 出版信息页（前置页 + 出版发行 + 标准编号 + 出版元数据字段）
+    if is_front_matter and _is_publication_info_page(block_text):
+        return (PageType.PUBLICATION_INFO, None)
+
+    # 2e. 封面页兜底（前置页 + 居中大标题 + 内容稀疏，排除目录页与表格页）
     if (
         is_front_matter
         and (toc_pages is None or (page_idx + 1) not in toc_pages)
@@ -680,7 +849,16 @@ def infer_page_type(
         if _is_title_or_text_dominant(blocks, INDEX_KEYWORDS):
             return (PageType.INDEX, None)
 
-    # 13. 前置页（front matter 默认：正文前的非封面/版权/目录页，即序/前言/作者简介等）
+    # 12b. 引用标准页（标题为"引用标准/规范性引用文件"，区别于参考文献）
+    if _contains_keyword(block_text, NORMATIVE_REFERENCE_KEYWORDS):
+        if _is_title_or_text_dominant(blocks, NORMATIVE_REFERENCE_KEYWORDS):
+            return (PageType.NORMATIVE_REFERENCES, None)
+
+    # 13. 前言页（文档级前言区间，含修订说明/起草单位等续页）
+    if foreword_pages is not None and (page_idx + 1) in foreword_pages:
+        return (PageType.FOREWORD, None)
+
+    # 14. 前置页（front matter 默认：正文前的非封面/版权/目录页，即序/前言/作者简介等）
     if is_front_matter:
         return (PageType.PREFACE, None)
 
@@ -740,11 +918,15 @@ def classify_all_pages(pdf_info_list: List[Dict]) -> None:
     total_pages = len(pdf_info_list)
     # 文档级目录页检测（连续区间 + 主导区间），供页面级判定使用
     toc_pages = _detect_toc_page_set(pdf_info_list)
-    # 文档级正文起始页：目录后一页；无目录时用章标题回退
+    # 文档级正文起始页：前置目录后一页；无目录时用章标题回退
     body_start = _detect_body_start(pdf_info_list, toc_pages)
+    # 文档级前言页检测（含修订说明/起草单位等续页）
+    foreword_pages = _detect_foreword_pages(pdf_info_list, toc_pages, body_start)
     for idx, page_info in enumerate(pdf_info_list):
         primary_type, secondary_type = infer_page_type(
-            page_info, idx, total_pages, toc_pages=toc_pages, body_start=body_start
+            page_info, idx, total_pages,
+            toc_pages=toc_pages, body_start=body_start,
+            foreword_pages=foreword_pages,
         )
         page_info["page_type"] = primary_type
         if secondary_type:
