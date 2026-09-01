@@ -65,6 +65,14 @@ APPENDIX_KEYWORDS = [
     "附录", "appendix", "附录", "supplement",
 ]
 
+# 附录标题模式（"附 录 A" / "附录A" / "附录 A" / "Appendix A"，后跟字母/数字编号）。
+# 附录起始页的标题常以 TEXT 块（居中大字）呈现而非 TITLE 块，
+# 故用独立模式匹配，要求 block 文本以附录标题开头（^ 锚定），
+# 避免正文中"按照附录 A 的要求"等引用误触发。
+_APPENDIX_TITLE_PATTERN = re.compile(
+    r"^(?:附\s*录|appendix)\s*[A-Z0-9]", re.IGNORECASE
+)
+
 # 术语表页关键词
 GLOSSARY_KEYWORDS = [
     "术语表", "glossary", "术语", "词汇表", "名词解释", "terminology",
@@ -79,20 +87,27 @@ INDEX_KEYWORDS = [
 # ─── 目录页检测增强（TOC 行密度 + 连续区间 + 主导区间）───────────────
 
 # TOC 条目行模式（章节号 + 引导符 + 页码）。
-# 引导符：U+2026 省略号 / U+00B7 中圆点允许 1 个以上；ASCII '.' 仅允许 2 个以上
-# （避免把标题中的小数点如 "4.0" 误判为引导符，见 Phase 0 报告 Q3）。
+# 引导符：U+2026 省略号 / U+00B7 中圆点 / ASCII '.' 均要求 2 个以上
+# （避免把标题中的小数点如 "4.0" 误判为引导符，见 Phase 0 报告 Q3；
+# 单点引导符会把正文 "12.2 xxx …… 见表 22。" 误判为目录行）。
+# 负向前瞻排除 "见表/见 表" 行：正文 "…… 见表 N。" 是表格引用而非目录条目。
 # 页码允许括号包裹（国标目录形如 "1 总 则 …… (1)"）。
 _TOC_LINE_PATTERN = re.compile(
     r"(?:第[一二三四五六七八九十百千\d]+[篇章节部]|[\d]+(?:\.[\d]+)*)\s*"
-    r".*?(?:[……·]{1,}|\.{2,})\s*[（(]?\s*[\dIVXivx]+\s*[)）]?"
+    r".*?(?!\s*见\s*表)(?:[…]{2,}|[·]{2,}|\.{2,})\s*[（(]?\s*[\dIVXivx]+\s*[)）]?"
 )
 
-# 杂志/生活类目录行模式：页码(2-3位数字) + 可选空白 + 文章标题(至少4个非数字字符)
+# 杂志/生活类目录行模式：页码(2-3位数字) + 可选空白 + 文章标题(至少7个非数字字符)
 # 例如: "010京沪高铁，让旅客出行更美好" (无空格), "070 黔味越山海，酸香漫京城" (有空格)
 # 注意：行尾为列表标点（；;。等）的行不算目录行 —— 正文编号列表项
 # （如 "19 测量轴电压；"）与目录行同为"数字+文字"形态，但目录条目不以列表标点结尾。
+# 负向前瞻 (?!\.\d)：页码数字后紧跟 ".数字" 的是条款号（如 "12.2 集合式电容器"、
+# "19.1 绝缘油"），属正文章节标题而非杂志目录行，必须排除。
+# 标题长度下限取 7（[^\d\s] + .{6,}）：正文章标题（如 "16 串联补偿装置"，标题 6 字）
+# 与杂志目录行同为"数字+文字"形态，但杂志文章标题通常更长；短标题（<7 字）的章
+# 标题不应被计为目录行，否则正文页会被误判为目录页。
 _MAGAZINE_TOC_LINE_PATTERN = re.compile(
-    r"^\s*\d{2,3}\s?[^\d\s].{4,}(?<![；;。．,，、:：!！?？])$"
+    r"^\s*\d{2,3}(?!\.\d)\s?[^\d\s].{6,}(?<![；;。．,，、:：!！?？])$"
 )
 
 # 杂志目录板块标题模式：中文标题 + 英文标题（空格分隔）
@@ -313,10 +328,11 @@ def _detect_toc_page_set(pdf_info_list: List[Dict]) -> Set[int]:
     """
     counts = [_count_toc_lines_in_page(p) for p in pdf_info_list]
 
-    # 兜底：目录页眉 + 行数足够（覆盖独立的简短目录页），先于候选判断
+    # 兜底：目录页眉 + 至少 1 行目录行（覆盖独立的简短目录页，
+    # 如国标"目次"页目录条目无编号、行计数偏少的情况），先于候选判断
     toc: Set[int] = set()
     for i, p in enumerate(pdf_info_list):
-        if counts[i] >= 2 and _page_has_toc_header(p):
+        if counts[i] >= 1 and _page_has_toc_header(p):
             toc.add(i + 1)
 
     candidates = [
@@ -357,16 +373,30 @@ def _detect_toc_page_set(pdf_info_list: List[Dict]) -> Set[int]:
 
 # ─── 前置页/封面增强 ───────────────────────────────────────────────────
 
-# 正文起始检测：章标题模式（第X章 / Chapter N / X.Y 开头 / 国标单级编号 "1 总则" 开头）
+# 正文起始检测：章标题模式（第X章 / Chapter N / X.Y 开头 / 国标单级编号 "1 总则" 开头）。
+# 负向前瞻紧跟编号数字之后（\s* 跳过编号与后续字符间的空格）：
+#   (?!k[VWA]?) 排除单位后缀（"10 kV～500 kV 输变电设备…" 是标准名称/电压范围，
+#                不是章标题，否则封面页会污染 heading_start）；
+#   (?!\s*[…·]{2,}) 排除含点线引导符的目录条目（"1 范围 …… 1"）。
 _BODY_HEADING_PATTERN = re.compile(
-    r"第[一二三四五六七八九十百千\d]+章|Chapter\s+\d+|^\d+\.\d+\s|^\d{1,2}\s+\S",
+    r"第[一二三四五六七八九十百千\d]+章|Chapter\s+\d+|^\d+\.\d+\s|^\d{1,2}(?!\s*k[VWA]?)(?!\s*[…·]{2,})\s+\S",
+    re.IGNORECASE,
+)
+
+# 编号章标题模式（仅用于 title 类 block，判定正文起始/前言区间边界）。
+# 比 _BODY_HEADING_PATTERN 更严格：只认 "第X章" 与 "N 标题" 单级编号，
+# 避免正文条款号 "5.1 xxx" 误触发。
+# (?!k[VWA]?) 排除单位后缀：封面标题 "10 kV～500 kV 输变电设备…" 的
+# "10 kV" 不是章标题，否则会误判正文起始、导致前言检测提前终止。
+_NUMBERED_CHAPTER_TITLE_PATTERN = re.compile(
+    r"第[一二三四五六七八九十百千\d]+章|^\d{1,2}(?!\s*k[VWA]?)\s+\S",
     re.IGNORECASE,
 )
 
 # 前置页标题关键词（供参考；前置页判定主要依赖 front-matter 位置）
 PREFACE_TITLE_KEYWORDS = [
     "序", "前言", "Foreword", "Preface", "作者简介", "编者的话",
-    "主编简介", "出版说明", "内容简介", "使用说明",
+    "主编简介", "出版说明", "内容简介", "使用说明", "编制说明",
 ]
 
 
@@ -416,7 +446,11 @@ def remove_garbled_blocks(pdf_info_list: List[Dict]) -> int:
 
 
 def _is_large_centered_title(blocks: List[Dict], page_w: float) -> bool:
-    """是否有大号居中标题（封面特征）：bbox 归一化后居中且宽度足够。"""
+    """是否有大号居中标题（封面特征）：bbox 归一化后居中且宽度足够。
+
+    宽度阈值取 0.2（而非 0.25）：前置区扉页标题（如"编 制 说 明"）宽度常
+    在 0.2~0.25 之间，取 0.2 可让这类稀疏标题页落入封面兜底，而非半标题页。
+    """
     title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
     for block in blocks:
         if block.get("type") not in title_types:
@@ -436,14 +470,24 @@ def _is_large_centered_title(blocks: List[Dict], page_w: float) -> bool:
                 continue
             width = (bbox[2] - bbox[0]) / page_w
             center_x = ((bbox[0] + bbox[2]) / 2) / page_w
-        if 0.25 < center_x < 0.75 and width > 0.25:
+        if 0.25 < center_x < 0.75 and width >= 0.2:
             return True
     return False
 
 
-def _detect_body_start_from_headings(pdf_info_list: List[Dict]) -> int:
-    """回退：从第一个章标题推断正文起始页（1-based）。无则返回 1。"""
+def _detect_body_start_from_headings(
+    pdf_info_list: List[Dict],
+    toc_pages: Optional[Set[int]] = None,
+) -> int:
+    """回退：从第一个章标题推断正文起始页（1-based）。无则返回 1。
+
+    目录页（toc_pages）被跳过：目录条目（如 "1 范围 …… 1"）虽形似章标题，
+    但只是页码索引，不得作为正文起始依据，否则 heading_start 会被误判为
+    目录页页码（1），导致 body_start 失效。
+    """
     for i, page in enumerate(pdf_info_list):
+        if toc_pages and (i + 1) in toc_pages:
+            continue
         for block in page.get("preproc_blocks", []):
             if block.get("type") not in (
                 BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE,
@@ -452,6 +496,38 @@ def _detect_body_start_from_headings(pdf_info_list: List[Dict]) -> int:
             if _BODY_HEADING_PATTERN.search(_block_text(block)):
                 return i + 1
     return 1
+
+
+def _page_has_numbered_chapter_title(page_info: Dict) -> bool:
+    """页面是否有编号章标题（title 类 block 以 "第X章" / "N 标题" 开头）。
+
+    仅检查标题类 block，避免正文条款号（"5.1 xxx"）或普通文本误触发。
+    用于前言区间边界：前言/修订说明续页之后出现的第一个编号章标题
+    即正文开始，前言区间不得越过该页。
+    """
+    title_types = {BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE}
+    for block in page_info.get("preproc_blocks", []):
+        if block.get("type") not in title_types:
+            continue
+        if _NUMBERED_CHAPTER_TITLE_PATTERN.search(_block_text(block).strip()):
+            return True
+    return False
+
+
+def _page_has_appendix_title(page_info: Dict) -> bool:
+    """页面是否有附录标题（"附 录 A" / "附录A" / "Appendix A"）。
+
+    附录起始页的标题常以 TEXT 块（居中大字）呈现而非 TITLE 块，
+    故检查所有 block（不仅 title 类）。要求 block 文本以附录标题
+    开头（^ 锚定）且较短，避免正文中"按照附录 A 的要求"等引用误触发。
+    """
+    for block in page_info.get("preproc_blocks", []):
+        text = _block_text(block).strip()
+        if not text or len(text) > 20:
+            continue
+        if _APPENDIX_TITLE_PATTERN.search(text):
+            return True
+    return False
 
 
 def _detect_body_start(pdf_info_list: List[Dict], toc_pages: Set[int]) -> int:
@@ -463,12 +539,16 @@ def _detect_body_start(pdf_info_list: List[Dict], toc_pages: Set[int]) -> int:
     """
     if not toc_pages:
         return _detect_body_start_from_headings(pdf_info_list)
-    # 找到首个章标题时，用它排除正文区误报的目录页（只统计前置目录）
-    heading_start = _detect_body_start_from_headings(pdf_info_list)
+    # 找到首个章标题时，用它排除正文区误报的目录页（只统计前置目录）。
+    # 传入 toc_pages 让章标题扫描跳过目录页（目录条目不是章标题）。
+    heading_start = _detect_body_start_from_headings(pdf_info_list, toc_pages)
     if heading_start > 1:
         front_toc = [p for p in toc_pages if p < heading_start]
         if front_toc:
-            return min(max(front_toc) + 1, heading_start)
+            # 正文起始 = 首个章标题页（而非目录后一页）：目录与章标题之间
+            # 可能存在前言/修订说明等前置页，body_start 取章标题页才能让
+            # 这些页落入 front matter 区间被正确分类（如 foreword）。
+            return heading_start
     # 未找到章标题（回退哨兵值 1）时，沿用旧逻辑：目录后一页
     return max(toc_pages) + 1
 
@@ -561,19 +641,31 @@ def _detect_foreword_pages(
 ) -> Set[int]:
     """文档级前言页检测，返回前言页集合（1-based，含续页）。
 
-    前言从含"前言"标题的前置页开始，到目录页或正文起始页之前结束
-    （覆盖修订说明、起草单位等续页）。
+    前言从含"前言"标题的前置页开始，到目录页、正文起始页或首个编号章
+    标题页之前结束（覆盖修订说明、起草单位等续页）。
+
+    编号章标题边界是兜底：当 body_start 检测失效（被误推后）时，
+    前言区间不会吞掉 "1 范围" 之后的正文页。
     """
     if body_start is None:
         return set()
     start = None
     for i in range(min(body_start - 1, len(pdf_info_list))):
+        if _page_has_numbered_chapter_title(pdf_info_list[i]):
+            # 已越过正文起始（编号章标题），前言不可能在其后
+            return set()
         blocks = pdf_info_list[i].get("preproc_blocks", [])
         if _is_title_or_text_dominant(blocks, FOREWORD_TITLE_KEYWORDS):
             start = i + 1
             break
     if start is None:
         return set()
+    # 前言区间不得越过首个编号章标题页（正文开始）。
+    # 只扫描 body_start 之前的页：body_start 本身即正文起始页，
+    # 其上的编号章标题是正文的标志而非前言的边界，纳入会误清空前言区间。
+    for j in range(start, min(body_start - 1, len(pdf_info_list))):
+        if _page_has_numbered_chapter_title(pdf_info_list[j]):
+            return set(range(start, j))
     end = body_start - 1
     later_toc = [p for p in toc_pages if p > start]
     if later_toc:
@@ -755,6 +847,12 @@ def infer_page_type(
     if len(blocks) <= BLANK_BLOCK_THRESHOLD:
         return (PageType.BLANK, None)
 
+    # 1a. 前言页（文档级前言区间，含修订说明/起草单位等续页）。
+    # 前置到封面/半标题判定之前：前言页常有大号居中标题（如"前言"），
+    # 若先走封面兜底会被误判为 cover，必须先按文档级前言区间归类。
+    if foreword_pages is not None and (page_idx + 1) in foreword_pages:
+        return (PageType.FOREWORD, None)
+
     # 2a. 封面页（首页 + doc_title）
     if page_idx == 0 and _has_doc_title(blocks) and _is_content_sparse(blocks):
         return (PageType.COVER, None)
@@ -771,9 +869,12 @@ def infer_page_type(
     if is_front_matter and _is_publication_info_page(block_text):
         return (PageType.PUBLICATION_INFO, None)
 
-    # 2e. 封面页兜底（前置页 + 居中大标题 + 内容稀疏，排除目录页与表格页）
+    # 2e. 封面页兜底（前置页 + 居中大标题 + 内容稀疏，排除目录页与表格页）。
+    # 仅限正文开始之前的页面：正文区之后的稀疏标题页（如附录起始页、
+    # "编制说明"扉页）不应判为 cover。body_start 未知（None）时不启用
+    # （与原 is_front_matter 语义一致，保持旧调用兼容）。
     if (
-        is_front_matter
+        (body_start is not None and (page_idx + 1) < body_start)
         and (toc_pages is None or (page_idx + 1) not in toc_pages)
         and _is_large_centered_title(blocks, page_w)
         and _is_content_sparse(blocks)
@@ -799,8 +900,17 @@ def infer_page_type(
             return (PageType.TOC, PageType.COLOPHON)
         return (PageType.COLOPHON, None)
 
-    # 6. 半标题页（封面后的几页 + 内容极少 + 只有标题）
-    if page_idx <= 3 and len(blocks) <= HALF_TITLE_MAX_BLOCKS:
+    # 6. 半标题页（封面后的几页 + 内容极少 + 只有标题）。
+    # 排除含目录页眉（"目次/目录"）的页面：国标"目次"页常为
+    # "标题 + 1 个目录文本块"的稀疏结构，不得误判为半标题页。
+    # 排除含编号章标题（"1 范围" / "第X章"）的页面：正文起始章标题页
+    # 常为"章标题 + 1 个文本块"的稀疏结构，应判 chapter_start 而非半标题页。
+    if (
+        page_idx <= 3
+        and len(blocks) <= HALF_TITLE_MAX_BLOCKS
+        and not _page_has_toc_header(page_info)
+        and not _page_has_numbered_chapter_title(page_info)
+    ):
         # 半标题页通常只有标题类 block，没有复杂内容
         non_title_types = set(block_counts.keys()) - {
             BlockType.DOC_TITLE, BlockType.PARAGRAPH_TITLE, BlockType.TITLE
@@ -834,29 +944,35 @@ def infer_page_type(
         if _is_title_or_text_dominant(blocks, ACKNOWLEDGMENT_KEYWORDS):
             return (PageType.ACKNOWLEDGMENT, None)
 
-    # 10. 附录页
+    # 10. 附录页。
+    # 附录起始页的标题常以 TEXT 块（居中大字）呈现而非 TITLE 块，
+    # 故除标题主导判定外，再用 _page_has_appendix_title 匹配"附 录 A"等标题。
     if _contains_keyword(block_text, APPENDIX_KEYWORDS):
-        if _is_title_or_text_dominant(blocks, APPENDIX_KEYWORDS):
+        if _is_title_or_text_dominant(blocks, APPENDIX_KEYWORDS) \
+                or _page_has_appendix_title(page_info):
             return (PageType.APPENDIX, None)
 
-    # 11. 术语表页
+    # 11. 术语表页。
+    # 排除含编号章标题（"1 范围" / "3 术语和定义"）的正文页：标准正文的
+    # "术语和定义"是编号章节（与"1 范围""2 规范性引用文件"并列），并非独立
+    # 术语表页；真正的术语表页以"术语表/术语"为主标题，不含编号章标题。
     if _contains_keyword(block_text, GLOSSARY_KEYWORDS):
         if _is_title_or_text_dominant(blocks, GLOSSARY_KEYWORDS):
-            return (PageType.GLOSSARY, None)
+            if not _page_has_numbered_chapter_title(page_info):
+                return (PageType.GLOSSARY, None)
 
     # 12. 索引页（注意与目录区分：索引通常有更密集的条目和页码）
     if _contains_keyword(block_text, INDEX_KEYWORDS):
         if _is_title_or_text_dominant(blocks, INDEX_KEYWORDS):
             return (PageType.INDEX, None)
 
-    # 12b. 引用标准页（标题为"引用标准/规范性引用文件"，区别于参考文献）
+    # 12b. 引用标准页（标题为"引用标准/规范性引用文件"，区别于参考文献）。
+    # 同样排除含编号章标题的正文页：正文"2 规范性引用文件"是编号章节，
+    # 真正的引用标准页以"引用标准/规范性引用文件"为主标题，不含编号章标题。
     if _contains_keyword(block_text, NORMATIVE_REFERENCE_KEYWORDS):
         if _is_title_or_text_dominant(blocks, NORMATIVE_REFERENCE_KEYWORDS):
-            return (PageType.NORMATIVE_REFERENCES, None)
-
-    # 13. 前言页（文档级前言区间，含修订说明/起草单位等续页）
-    if foreword_pages is not None and (page_idx + 1) in foreword_pages:
-        return (PageType.FOREWORD, None)
+            if not _page_has_numbered_chapter_title(page_info):
+                return (PageType.NORMATIVE_REFERENCES, None)
 
     # 14. 前置页（front matter 默认：正文前的非封面/版权/目录页，即序/前言/作者简介等）
     if is_front_matter:

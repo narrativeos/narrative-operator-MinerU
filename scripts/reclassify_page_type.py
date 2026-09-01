@@ -66,7 +66,7 @@ def _update_content_list_v2(clv2_path, pi):
             elif "page_type_secondary" in block:
                 del block["page_type_secondary"]
     with open(clv2_path, "w") as f:
-        json.dump(clv2, f, ensure_ascii=False)
+        json.dump(clv2, f, ensure_ascii=False, indent=4)
     print(f"[ok] updated content_list_v2: {clv2_path} ({changed} 页级变化)")
 
 
@@ -97,7 +97,7 @@ def _update_content_list(cl_path, pi):
         elif "page_type_secondary" in block:
             del block["page_type_secondary"]
     with open(cl_path, "w") as f:
-        json.dump(cl, f, ensure_ascii=False)
+        json.dump(cl, f, ensure_ascii=False, indent=4)
     print(f"[ok] updated content_list: {cl_path} ({changed} block 变化)")
 
 
@@ -188,7 +188,7 @@ def main():
 
     # 写回 middle.json
     with open(middle, "w") as f:
-        json.dump(m, f, ensure_ascii=False)
+        json.dump(m, f, ensure_ascii=False, indent=4)
     print(f"\n[ok] updated middle.json: {middle}")
 
     if clv2:

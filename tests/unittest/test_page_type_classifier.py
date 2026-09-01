@@ -21,6 +21,7 @@ from mineru.backend.pipeline.page_type_classifier import (
     remove_garbled_blocks,
     _TOC_LINE_PATTERN,
     _MAGAZINE_TOC_LINE_PATTERN,
+    _detect_body_start_from_headings,
 )
 from mineru.utils.enum_class import BlockType, PageType
 
@@ -672,6 +673,253 @@ class TestStandardFrontMatterPages(unittest.TestCase):
         self.assertEqual(_normalize_cjk_whitespace("总 则"), "总则")
         # 英文/数字间空白不受影响
         self.assertEqual(_normalize_cjk_whitespace("GB 50150"), "GB 50150")
+
+
+class TestQgdwStandardPageTypeFixes(unittest.TestCase):
+    """Q/GDW 11447—2024 页码类型误判修复回归。
+
+    覆盖四类根因：
+    1. 正文 "…… 见表 N。" 行被误判为目录行（学术型 + 杂志型模式）；
+    2. 国标"目次"页（无编号目录条目 + 单文本块）漏检为目录页；
+    3. 目录条目 / 封面电压范围标题污染 body_start 检测；
+    4. 前言区间吞掉正文、正文区稀疏标题页误判 cover。
+    """
+
+    def _make_page_info(self, blocks, page_size=(800, 1000)):
+        return {"preproc_blocks": blocks, "page_size": list(page_size)}
+
+    def test_toc_line_pattern_excludes_see_table(self):
+        # 正文表格引用行 "…… 见表 N。" 不是目录行
+        self.assertFalse(_TOC_LINE_PATTERN.search("12.2 集合式电容器 …… 见表 22。"))
+        self.assertFalse(_TOC_LINE_PATTERN.search("7.1 电磁式电流互感器 …… 见表 5。"))
+        # 单点引导符（… 仅 1 个）不算目录行
+        self.assertFalse(_TOC_LINE_PATTERN.search("12.2 集合式电容器 … 22"))
+        # 正常目录行仍匹配
+        self.assertTrue(_TOC_LINE_PATTERN.search("1 总 则 …… (1)"))
+        self.assertTrue(_TOC_LINE_PATTERN.search("25 接地装置 …… (69)"))
+        self.assertTrue(_TOC_LINE_PATTERN.search("7.3 工业4.0下液压故障诊断 …… 372"))
+
+    def test_magazine_pattern_excludes_clause_number(self):
+        # 正文条款标题（页码数字后紧跟 ".数字"）不是杂志目录行
+        self.assertFalse(_MAGAZINE_TOC_LINE_PATTERN.search("12.2 集合式电容器"))
+        self.assertFalse(_MAGAZINE_TOC_LINE_PATTERN.search("19.1 绝缘油"))
+        self.assertFalse(_MAGAZINE_TOC_LINE_PATTERN.search("16.1 金属氧化物限压器"))
+        # 杂志目录行仍匹配
+        self.assertTrue(_MAGAZINE_TOC_LINE_PATTERN.search("070 黔味越山海，酸香漫京城"))
+        self.assertTrue(_MAGAZINE_TOC_LINE_PATTERN.search("010京沪高铁，让旅客出行更美好"))
+
+    def test_count_toc_lines_ignores_body_see_table(self):
+        # 正文页（含 "…… 见表 N。" 与条款标题）不应计出目录行
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900], "lines": [{"spans": [{
+                "content": "12.2 集合式电容器 …… 见表 22。\n12.3 断路器断口并联电容器 …… 见表 23。\n16 串联补偿装置\n16.1 金属氧化物限压器"
+            }]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        self.assertEqual(_count_toc_lines_in_page(page_info), 0)
+
+    def test_body_start_page_not_glossary_or_normative_ref(self):
+        # 正文起始页含编号章节 "1 范围 / 2 规范性引用文件 / 3 术语和定义"，
+        # 其中 "术语和定义" 含术语关键词、"规范性引用文件" 含引用标准关键词，
+        # 但它们是并列的编号章节而非独立术语表/引用标准页，应判 chapter_start。
+        blocks = [
+            {"type": BlockType.DOC_TITLE, "bbox": [93, 130, 505, 149],
+             "lines": [{"spans": [{"content": "变电站设备验收规范 第 1部分：油浸式变压器（电抗器）"}]}]},
+            {"type": BlockType.TITLE, "bbox": [68, 179, 109, 192],
+             "lines": [{"spans": [{"content": "1 范围"}]}]},
+            {"type": BlockType.TEXT, "bbox": [67, 211, 539, 239],
+             "lines": [{"spans": [{"content": "本部分规定了油浸式变压器验收工作的内容和要求。"}]}]},
+            {"type": BlockType.TITLE, "bbox": [67, 272, 162, 286],
+             "lines": [{"spans": [{"content": "2 规范性引用文件"}]}]},
+            {"type": BlockType.TEXT, "bbox": [67, 304, 540, 333],
+             "lines": [{"spans": [{"content": "下列文件对于本文件的应用是必不可少的。"}]}]},
+            {"type": BlockType.TITLE, "bbox": [67, 412, 140, 426],
+             "lines": [{"spans": [{"content": "3 术语和定义"}]}]},
+            {"type": BlockType.TEXT, "bbox": [89, 444, 235, 457],
+             "lines": [{"spans": [{"content": "下列术语和定义适用于本文件。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 5, 55)
+        self.assertEqual(result[0], PageType.CHAPTER_START)
+        self.assertNotEqual(result[0], PageType.GLOSSARY)
+        self.assertNotEqual(result[0], PageType.NORMATIVE_REFERENCES)
+
+    def test_appendix_start_page_with_text_title(self):
+        # 附录起始页：标题 "附 录 A" 以 TEXT 块（居中大字）呈现而非 TITLE 块，
+        # 后跟 "（规范性附录）"、附录标题与表格，应判 appendix。
+        blocks = [
+            {"type": BlockType.TEXT, "bbox": [278, 129, 331, 142],
+             "lines": [{"spans": [{"content": "附 录 A"}]}]},
+            {"type": BlockType.TEXT, "bbox": [271, 145, 337, 158],
+             "lines": [{"spans": [{"content": "（规范性附录）"}]}]},
+            {"type": BlockType.TEXT, "bbox": [223, 160, 384, 174],
+             "lines": [{"spans": [{"content": "油浸式变压器（电抗器）验收标准"}]}]},
+            {"type": BlockType.TEXT, "bbox": [89, 190, 334, 203],
+             "lines": [{"spans": [{"content": "油浸式变压器（电抗器）验收标准见表A.1～表A.16。"}]}]},
+            {"type": BlockType.TABLE, "bbox": [69, 235, 539, 731], "lines": []},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 9, 55)
+        self.assertEqual(result[0], PageType.APPENDIX)
+
+    def test_body_page_mentioning_appendix_not_appendix(self):
+        # 正文页在长句中引用 "附录 A"（非独立短标题块），不应判 appendix。
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [67, 100, 200, 115],
+             "lines": [{"spans": [{"content": "4.5 厂内验收条件和要求"}]}]},
+            {"type": BlockType.TEXT, "bbox": [67, 140, 540, 400],
+             "lines": [{"spans": [{"content": "变压器隐蔽工程验收工作按照附录 A中表 A.9 要求执行，并记录相关数据。"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        result = infer_page_type(page_info, 10, 55)
+        self.assertNotEqual(result[0], PageType.APPENDIX)
+
+    def test_body_start_skips_toc_entries(self):
+        # 目录条目（"1 范围 …… 1"）与封面电压范围（"10 kV～500 kV"）
+        # 不得污染 heading_start；正文起始应落在首个真实章标题页
+        pdf_info = [
+            # p1 封面：标题含电压范围
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 100, 700, 200],
+                 "lines": [{"spans": [{"content": "10 kV～500 kV 输变电设备交接试验规程"}]}]},
+            ]),
+            # p2 目次（目录页）
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [270, 100, 340, 130],
+                 "lines": [{"spans": [{"content": "目次"}]}]},
+                {"type": BlockType.TEXT, "bbox": [60, 150, 540, 600],
+                 "lines": [{"spans": [{"content": "前言 …… II\n1 范围 …… 1\n2 规范性引用文件 …… 1"}]}]},
+            ]),
+            # p3 前言
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "前言"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "本文件依据 GB/T 1.1—2020 起草。"}]}]},
+            ]),
+            # p4 正文起始：章标题 "1 范围"
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "1 范围"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "本文件规定了交接试验项目。"}]}]},
+            ]),
+        ]
+        toc_pages = _detect_toc_page_set(pdf_info)
+        self.assertIn(2, toc_pages)
+        # 跳过目录页后，heading_start 应落在 p4（而非封面 p1 或目录 p2）
+        self.assertEqual(_detect_body_start_from_headings(pdf_info, toc_pages), 4)
+        self.assertEqual(_detect_body_start(pdf_info, toc_pages), 4)
+
+    def test_foreword_range_stops_at_chapter(self):
+        # 前言区间止于首个编号章标题页，不吞正文
+        pdf_info = [
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 100, 700, 200],
+                 "lines": [{"spans": [{"content": "封面标题"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [270, 100, 340, 130],
+                 "lines": [{"spans": [{"content": "目次"}]}]},
+                {"type": BlockType.TEXT, "bbox": [60, 150, 540, 600],
+                 "lines": [{"spans": [{"content": "1 范围 …… 1\n2 规范性引用文件 …… 1"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "前言"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "本文件起草说明。"}]}]},
+            ]),
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "1 范围"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "正文内容。"}]}]},
+            ]),
+        ]
+        toc_pages = _detect_toc_page_set(pdf_info)
+        body_start = _detect_body_start(pdf_info, toc_pages)
+        self.assertEqual(body_start, 4)
+        # 前言仅 p3，不含正文 p4
+        self.assertEqual(_detect_foreword_pages(pdf_info, toc_pages, body_start), {3})
+
+    def test_post_body_sparse_title_not_cover(self):
+        # 正文区之后的稀疏居中标题页（如"编制说明"扉页）不判 cover
+        blocks = [
+            {"type": BlockType.TITLE, "bbox": [150, 100, 350, 200],
+             "lines": [{"spans": [{"content": "编 制 说 明"}]}]},
+            {"type": BlockType.TEXT, "bbox": [200, 300, 300, 320],
+             "lines": [{"spans": [{"content": "Q/GDW 11447—2024"}]}]},
+        ]
+        page_info = self._make_page_info(blocks)
+        # body_start=4，该页 idx=50（正文区之后）→ 不判 cover
+        result = infer_page_type(page_info, 50, 60, body_start=4)
+        self.assertNotEqual(result[0], PageType.COVER)
+        # 同一页若在前置区（idx=2 < body_start）仍可判 cover
+        result_front = infer_page_type(page_info, 2, 60, body_start=4)
+        self.assertEqual(result_front[0], PageType.COVER)
+
+    def test_e2e_qgdw_structure(self):
+        # 端到端：封面/目次/前言/正文/附录/编制说明 结构
+        pdf_info = [
+            # p1 封面
+            self._make_page_info([
+                {"type": BlockType.DOC_TITLE, "bbox": [150, 100, 650, 200],
+                 "lines": [{"spans": [{"content": "10 kV～500 kV 输变电设备交接试验规程"}]}]},
+                {"type": BlockType.TEXT, "bbox": [200, 300, 600, 330],
+                 "lines": [{"spans": [{"content": "Q/GDW 11447—2024"}]}]},
+            ]),
+            # p2 目次（目录页）
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [270, 100, 340, 130],
+                 "lines": [{"spans": [{"content": "目次"}]}]},
+                {"type": BlockType.TEXT, "bbox": [60, 150, 540, 600],
+                 "lines": [{"spans": [{"content": "前言 …… II\n1 范围 …… 1\n2 规范性引用文件 …… 1\n3 术语和定义 …… 2"}]}]},
+            ]),
+            # p3 前言
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "前言"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "本文件依据 GB/T 1.1—2020 起草，代替 Q/GDW 11447—2015。"}]}]},
+            ]),
+            # p4 正文起始
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "1 范围"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "本文件规定了新安装设备的交接试验项目。"}]}]},
+            ]),
+            # p5 正文（含 "…… 见表 N。"，不得误判目录）
+            self._make_page_info([
+                {"type": BlockType.TEXT, "bbox": [100, 100, 700, 900],
+                 "lines": [{"spans": [{"content": "12.2 集合式电容器 …… 见表 22。\n12.3 断路器断口并联电容器 …… 见表 23。"}]}]},
+            ]),
+            # p6 附录
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [100, 50, 700, 100],
+                 "lines": [{"spans": [{"content": "附 录 A"}]}]},
+                {"type": BlockType.TEXT, "bbox": [100, 150, 700, 900],
+                 "lines": [{"spans": [{"content": "断路器操动机构的试验。"}]}]},
+            ]),
+            # p7 编制说明（正文区之后的稀疏标题页）
+            self._make_page_info([
+                {"type": BlockType.TITLE, "bbox": [150, 100, 350, 200],
+                 "lines": [{"spans": [{"content": "编 制 说 明"}]}]},
+                {"type": BlockType.TEXT, "bbox": [200, 300, 300, 320],
+                 "lines": [{"spans": [{"content": "Q/GDW 11447—2024"}]}]},
+            ]),
+        ]
+        classify_all_pages(pdf_info)
+        self.assertEqual(pdf_info[0]["page_type"], PageType.COVER)
+        self.assertEqual(pdf_info[1]["page_type"], PageType.TOC)
+        self.assertEqual(pdf_info[2]["page_type"], PageType.FOREWORD)
+        self.assertEqual(pdf_info[3]["page_type"], PageType.CHAPTER_START)
+        # 正文 "…… 见表 N。" 页不得判为目录
+        self.assertNotEqual(pdf_info[4]["page_type"], PageType.TOC)
+        self.assertEqual(pdf_info[5]["page_type"], PageType.APPENDIX)
+        # 编制说明页（正文区之后）不得判 cover
+        self.assertNotEqual(pdf_info[6]["page_type"], PageType.COVER)
 
 
 if __name__ == "__main__":
