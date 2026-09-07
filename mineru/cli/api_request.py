@@ -43,6 +43,7 @@ class ParseRequestOptions:
     return_md: bool
     return_middle_json: bool
     return_model_output: bool
+    return_layout_quality: bool
     return_content_list: bool
     return_images: bool
     response_format_zip: bool
@@ -171,6 +172,17 @@ async def parse_request_form(
         bool,
         Form(description="Return model output JSON in response"),
     ] = True,
+    return_layout_quality: Annotated[
+        bool,
+        Form(
+            description=(
+                "Compute and return the book-level layout quality score "
+                "(AHP-entropy TOPSIS) after parsing. When enabled, middle/model "
+                "JSON is always written to disk so the score can be computed, "
+                "even if their return options are off."
+            ),
+        ),
+    ] = True,
     return_content_list: Annotated[
         bool,
         Form(description="Return content list JSON in response"),
@@ -182,7 +194,7 @@ async def parse_request_form(
     response_format_zip: Annotated[
         bool,
         Form(description="Return results as a ZIP file instead of JSON"),
-    ] = False,
+    ] = True,
     return_original_file: Annotated[
         bool,
         Form(
@@ -246,6 +258,7 @@ async def parse_request_form(
         return_md=return_md,
         return_middle_json=return_middle_json,
         return_model_output=return_model_output,
+        return_layout_quality=return_layout_quality,
         return_content_list=return_content_list,
         return_images=return_images,
         response_format_zip=response_format_zip,

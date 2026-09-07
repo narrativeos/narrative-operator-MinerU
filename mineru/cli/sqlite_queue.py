@@ -57,12 +57,13 @@ class SQLiteQueueTask:
         file_names: Optional[list] = None,
         output_dir: Optional[str] = None,
         return_md: bool = True,
-        return_middle_json: bool = False,
-        return_model_output: bool = False,
-        return_content_list: bool = False,
-        return_images: bool = False,
-        response_format_zip: bool = False,
-        return_original_file: bool = False,
+        return_middle_json: bool = True,
+        return_model_output: bool = True,
+        return_layout_quality: bool = True,
+        return_content_list: bool = True,
+        return_images: bool = True,
+        response_format_zip: bool = True,
+        return_original_file: bool = True,
         client_side_output_generation: bool = False,
         server_url: Optional[str] = None,
         upload_names: Optional[list] = None,
@@ -98,6 +99,7 @@ class SQLiteQueueTask:
         self.return_md = return_md
         self.return_middle_json = return_middle_json
         self.return_model_output = return_model_output
+        self.return_layout_quality = return_layout_quality
         self.return_content_list = return_content_list
         self.return_images = return_images
         self.response_format_zip = response_format_zip
@@ -215,12 +217,12 @@ class SQLiteQueueManager:
                 file_names TEXT,
                 output_dir TEXT,
                 return_md INTEGER DEFAULT 1,
-                return_middle_json INTEGER DEFAULT 0,
-                return_model_output INTEGER DEFAULT 0,
-                return_content_list INTEGER DEFAULT 0,
-                return_images INTEGER DEFAULT 0,
-                response_format_zip INTEGER DEFAULT 0,
-                return_original_file INTEGER DEFAULT 0,
+                return_middle_json INTEGER DEFAULT 1,
+                return_model_output INTEGER DEFAULT 1,
+                return_content_list INTEGER DEFAULT 1,
+                return_images INTEGER DEFAULT 1,
+                response_format_zip INTEGER DEFAULT 1,
+                return_original_file INTEGER DEFAULT 1,
                 client_side_output_generation INTEGER DEFAULT 0,
                 server_url TEXT,
                 upload_names TEXT,
@@ -233,12 +235,13 @@ class SQLiteQueueManager:
         self._ensure_column("file_names", "TEXT")
         self._ensure_column("output_dir", "TEXT")
         self._ensure_column("return_md", "INTEGER DEFAULT 1")
-        self._ensure_column("return_middle_json", "INTEGER DEFAULT 0")
-        self._ensure_column("return_model_output", "INTEGER DEFAULT 0")
-        self._ensure_column("return_content_list", "INTEGER DEFAULT 0")
-        self._ensure_column("return_images", "INTEGER DEFAULT 0")
-        self._ensure_column("response_format_zip", "INTEGER DEFAULT 0")
-        self._ensure_column("return_original_file", "INTEGER DEFAULT 0")
+        self._ensure_column("return_middle_json", "INTEGER DEFAULT 1")
+        self._ensure_column("return_model_output", "INTEGER DEFAULT 1")
+        self._ensure_column("return_layout_quality", "INTEGER DEFAULT 1")
+        self._ensure_column("return_content_list", "INTEGER DEFAULT 1")
+        self._ensure_column("return_images", "INTEGER DEFAULT 1")
+        self._ensure_column("response_format_zip", "INTEGER DEFAULT 1")
+        self._ensure_column("return_original_file", "INTEGER DEFAULT 1")
         self._ensure_column("client_side_output_generation", "INTEGER DEFAULT 0")
         self._ensure_column("server_url", "TEXT")
         self._ensure_column("upload_names", "TEXT")
@@ -297,12 +300,13 @@ class SQLiteQueueManager:
             file_names=parse_json(d.get("file_names")),
             output_dir=d.get("output_dir"),
             return_md=bool(d.get("return_md", 1)),
-            return_middle_json=bool(d.get("return_middle_json", 0)),
-            return_model_output=bool(d.get("return_model_output", 0)),
-            return_content_list=bool(d.get("return_content_list", 0)),
-            return_images=bool(d.get("return_images", 0)),
-            response_format_zip=bool(d.get("response_format_zip", 0)),
-            return_original_file=bool(d.get("return_original_file", 0)),
+            return_middle_json=bool(d.get("return_middle_json", 1)),
+            return_model_output=bool(d.get("return_model_output", 1)),
+            return_layout_quality=bool(d.get("return_layout_quality", 1)),
+            return_content_list=bool(d.get("return_content_list", 1)),
+            return_images=bool(d.get("return_images", 1)),
+            response_format_zip=bool(d.get("response_format_zip", 1)),
+            return_original_file=bool(d.get("return_original_file", 1)),
             client_side_output_generation=bool(d.get("client_side_output_generation", 0)),
             server_url=d.get("server_url"),
             upload_names=parse_json(d.get("upload_names")),
@@ -323,11 +327,12 @@ class SQLiteQueueManager:
                     effort, start_page_id, end_page_id, created_at, started_at,
                     completed_at, error, result_dir, queue_order, file_names,
                     output_dir, return_md, return_middle_json, return_model_output,
-                    return_content_list, return_images, response_format_zip,
-                    return_original_file, client_side_output_generation, server_url,
+                    return_layout_quality, return_content_list, return_images,
+                    response_format_zip, return_original_file,
+                    client_side_output_generation, server_url,
                     upload_names, uploads, submit_order,
                     progress_percent, current_page, total_pages, current_stage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     filename=excluded.filename, file_size=excluded.file_size,
                     status=excluded.status, backend=excluded.backend,
@@ -341,6 +346,7 @@ class SQLiteQueueManager:
                     file_names=excluded.file_names, output_dir=excluded.output_dir,
                     return_md=excluded.return_md, return_middle_json=excluded.return_middle_json,
                     return_model_output=excluded.return_model_output,
+                    return_layout_quality=excluded.return_layout_quality,
                     return_content_list=excluded.return_content_list,
                     return_images=excluded.return_images,
                     response_format_zip=excluded.response_format_zip,
@@ -362,7 +368,8 @@ class SQLiteQueueManager:
                 task.error, task.result_dir, task.queue_order,
                 json.dumps(task.file_names) if task.file_names else None,
                 task.output_dir, int(task.return_md), int(task.return_middle_json),
-                int(task.return_model_output), int(task.return_content_list),
+                int(task.return_model_output), int(task.return_layout_quality),
+                int(task.return_content_list),
                 int(task.return_images), int(task.response_format_zip),
                 int(task.return_original_file), int(task.client_side_output_generation),
                 task.server_url,

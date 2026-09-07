@@ -1,5 +1,6 @@
 # Copyright (c) Opendatalab. All rights reserved.
 import asyncio
+import json
 import mimetypes
 import multiprocessing
 import os
@@ -167,6 +168,7 @@ class AsyncParseTask:
     return_md: bool
     return_middle_json: bool
     return_model_output: bool
+    return_layout_quality: bool
     return_content_list: bool
     return_images: bool
     response_format_zip: bool
@@ -185,6 +187,8 @@ class AsyncParseTask:
     current_page: int = 0
     total_pages: int = 0
     current_stage: Optional[str] = None
+    # 解析完成后计算的整书版面质量评分 (仅 return_layout_quality 开启时填充)
+    layout_quality: Optional[dict[str, Any]] = None
 
     def to_status_payload(
         self,
@@ -523,9 +527,20 @@ def create_result_zip(
     return_content_list: bool,
     return_images: bool,
     return_original_file: bool,
+    layout_quality: Optional[dict[str, Any]] = None,
 ) -> str:
     zip_fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix="mineru_results_")
     os.close(zip_fd)
+
+    # 版面质量评分按书名映射 (book 名 = pdf_name, 见 load_book_from_hybrid_dir)
+    lq_by_book: dict[str, dict[str, Any]] = {}
+    if layout_quality is not None:
+        if "books" in layout_quality:
+            lq_by_book = {
+                b.get("book"): b for b in layout_quality["books"] if isinstance(b, dict)
+            }
+        else:
+            lq_by_book = {layout_quality.get("book"): layout_quality}
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for pdf_name in pdf_file_names:
@@ -637,6 +652,21 @@ def create_result_zip(
                         f"{pdf_name}_layout.pdf",
                     ),
                 )
+
+            # 整书版面质量评分, 与 middle/model json 同目录 (hybrid_auto 内)
+            lq = lq_by_book.pop(pdf_name, None)
+            if lq is not None:
+                zf.writestr(
+                    build_zip_arcname(pdf_name, parse_dir, "layout_quality.json"),
+                    json.dumps(lq, ensure_ascii=False, indent=2),
+                )
+
+        # 兜底: 书名与 pdf_name 对不上时仍写入 zip 根目录, 避免丢失评分数据
+        for book_name, lq in lq_by_book.items():
+            zf.writestr(
+                f"layout_quality_{book_name}.json" if book_name else "layout_quality.json",
+                json.dumps(lq, ensure_ascii=False, indent=2),
+            )
     return zip_path
 
 
@@ -664,6 +694,7 @@ async def build_result_response(
     return_images: bool,
     response_format_zip: bool,
     return_original_file: bool,
+    layout_quality: Optional[dict[str, Any]] = None,
     zip_filename: str = "results.zip",
 ) -> Response:
     if response_format_zip:
@@ -680,6 +711,7 @@ async def build_result_response(
                 return_content_list=return_content_list,
                 return_images=return_images,
                 return_original_file=return_original_file,
+                layout_quality=layout_quality,
             )
         )
         try:
@@ -707,14 +739,14 @@ async def build_result_response(
         return_content_list=return_content_list,
         return_images=return_images,
     )
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "backend": backend,
-            "version": __version__,
-            "results": result_dict,
-        },
-    )
+    content: dict[str, Any] = {
+        "backend": backend,
+        "version": __version__,
+        "results": result_dict,
+    }
+    if layout_quality is not None:
+        content["layout_quality"] = layout_quality
+    return JSONResponse(status_code=status_code, content=content)
 
 
 def build_task_submission_response(
@@ -748,6 +780,7 @@ async def build_sync_file_parse_response(
             return_images=task.return_images,
             response_format_zip=task.response_format_zip,
             return_original_file=task.return_original_file,
+            layout_quality=task.layout_quality,
             zip_filename=f"{task.task_id}.zip",
         )
         response.headers[FILE_PARSE_TASK_ID_HEADER] = task.task_id
@@ -768,15 +801,15 @@ async def build_sync_file_parse_response(
         return_content_list=task.return_content_list,
         return_images=task.return_images,
     )
-    return JSONResponse(
-        status_code=200,
-        content={
-            **task_payload,
-            "backend": task.backend,
-            "version": __version__,
-            "results": result_dict,
-        },
-    )
+    content: dict[str, Any] = {
+        **task_payload,
+        "backend": task.backend,
+        "version": __version__,
+        "results": result_dict,
+    }
+    if task.layout_quality is not None:
+        content["layout_quality"] = task.layout_quality
+    return JSONResponse(status_code=200, content=content)
 
 
 async def save_upload_files(upload_dir: str, files: list[UploadFile]) -> list[StoredUpload]:
@@ -880,8 +913,16 @@ async def run_parse_job(
         f_draw_layout_bbox=True,
         f_draw_span_bbox=False,
         f_dump_md=request_options.return_md,
-        f_dump_middle_json=request_options.return_middle_json,
-        f_dump_model_output=request_options.return_model_output,
+        # return_layout_quality 开启时强制落盘 middle/model json (评分原料),
+        # 但不改变响应内容 (响应仍由对应 return 选项控制)
+        f_dump_middle_json=(
+            request_options.return_middle_json
+            or getattr(request_options, "return_layout_quality", False)
+        ),
+        f_dump_model_output=(
+            request_options.return_model_output
+            or getattr(request_options, "return_layout_quality", False)
+        ),
         f_dump_orig_pdf=(
             request_options.return_original_file and request_options.response_format_zip
         ),
@@ -940,6 +981,7 @@ async def create_async_parse_task(
             return_md=request_options.return_md,
             return_middle_json=request_options.return_middle_json,
             return_model_output=request_options.return_model_output,
+            return_layout_quality=request_options.return_layout_quality,
             return_content_list=request_options.return_content_list,
             return_images=request_options.return_images,
             response_format_zip=request_options.response_format_zip,
@@ -1237,6 +1279,7 @@ class AsyncTaskManager:
             return_md=task.return_md,
             return_middle_json=task.return_middle_json,
             return_model_output=task.return_model_output,
+            return_layout_quality=task.return_layout_quality,
             return_content_list=task.return_content_list,
             return_images=task.return_images,
             response_format_zip=task.response_format_zip,
@@ -1288,6 +1331,7 @@ class AsyncTaskManager:
             return_md=sqlite_task.return_md,
             return_middle_json=sqlite_task.return_middle_json,
             return_model_output=sqlite_task.return_model_output,
+            return_layout_quality=sqlite_task.return_layout_quality,
             return_content_list=sqlite_task.return_content_list,
             return_images=sqlite_task.return_images,
             response_format_zip=sqlite_task.response_format_zip,
@@ -1377,6 +1421,9 @@ class AsyncTaskManager:
             config=config,
             progress_callback=progress_callback,
         )
+        if task.return_layout_quality:
+            # best-effort: 评分失败不影响解析结果
+            task.layout_quality = await compute_task_layout_quality(task)
         task.progress_percent = 100
         task.current_stage = "completed"
         task.status = TASK_COMPLETED
@@ -1577,8 +1624,138 @@ async def get_async_task_result(
         return_images=task.return_images,
         response_format_zip=task.response_format_zip,
         return_original_file=task.return_original_file,
+        layout_quality=task.layout_quality,
         zip_filename=f"{task.task_id}.zip",
     )
+
+
+def _load_layout_quality_service():
+    """懒加载版面质量分析模块 (scripts.layout_quality, 仓库内开发工具包)。
+
+    不可用时 (如仅安装 mineru 包的生产环境) 返回 None, 端点据此返回 501。
+    """
+    try:
+        from scripts.layout_quality import service as _lq_service
+    except ImportError:
+        return None
+    return _lq_service
+
+
+async def compute_task_layout_quality(
+    task: AsyncParseTask, n_sigma: float = 3.0
+) -> Optional[dict[str, Any]]:
+    """计算任务解析输出的整书版面质量评分 (best-effort)。
+
+    单文件返回该书评分 dict, 多文件返回 {"books": [...]}。
+    模块不可用或找不到可评分数据时返回 None (不抛异常, 不影响解析结果)。
+    """
+    service = _load_layout_quality_service()
+    if service is None:
+        logger.warning(
+            f"Task {task.task_id}: layout quality module unavailable, "
+            "skipping return_layout_quality"
+        )
+        return None
+    books = []
+    for pdf_name in task.file_names:
+        try:
+            parse_dir = get_parse_dir(
+                task.output_dir, pdf_name, task.backend, task.parse_method
+            )
+        except ValueError:
+            continue
+        if not os.path.exists(parse_dir):
+            continue
+        try:
+            books.append(
+                await asyncio.to_thread(
+                    service.analyze_hybrid_dir, parse_dir, n_sigma=n_sigma
+                )
+            )
+        except FileNotFoundError:
+            continue
+    if not books:
+        return None
+    return books[0] if len(books) == 1 else {"books": books}
+
+
+@app.get(
+    path="/layout_quality",
+    name="get_layout_quality",
+    summary="整书版面质量评分 (AHP-熵权TOPSIS)",
+    description=(
+        "传入 MinerU hybrid_auto 输出目录 (含 *_model.json 与 *_middle.json), "
+        "返回逐页版面指标、全书绝对评分与 QA 报告。只读计算, 不写任何文件。"
+    ),
+)
+async def get_layout_quality(path: str, n_sigma: float = 3.0):
+    service = _load_layout_quality_service()
+    if service is None:
+        raise HTTPException(
+            status_code=501,
+            detail="版面质量模块不可用 (scripts.layout_quality 无法导入)",
+        )
+    target = Path(path).expanduser()
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail=f"目录不存在: {path}")
+    try:
+        return await asyncio.to_thread(
+            service.analyze_hybrid_dir, str(target), n_sigma=n_sigma
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get(
+    path="/tasks/{task_id}/layout_quality",
+    name="get_task_layout_quality",
+    summary="解析任务的整书版面质量评分",
+    description=(
+        "按任务 ID 定位解析输出目录并执行版面质量评分。"
+        "解析请求需开启 return_middle_json 与 return_model_output "
+        "(或 return_layout_quality), 否则数据缺失。"
+    ),
+)
+async def get_task_layout_quality(task_id: str, request: Request, n_sigma: float = 3.0):
+    task_manager = get_task_manager()
+    task = task_manager.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status in (TASK_PENDING, TASK_PROCESSING):
+        return JSONResponse(
+            status_code=202,
+            content={
+                **task.to_status_payload(request),
+                "message": "Task is not complete, layout quality scoring is unavailable",
+            },
+        )
+
+    if task.status == TASK_FAILED:
+        raise HTTPException(status_code=409, detail="Task execution failed")
+
+    # 复用解析时 (return_layout_quality=true) 已计算的结果 (默认 n_sigma)
+    cached = getattr(task, "layout_quality", None)
+    if cached is not None and n_sigma == 3.0:
+        return {**cached, "task_id": task_id}
+
+    if _load_layout_quality_service() is None:
+        raise HTTPException(
+            status_code=501,
+            detail="版面质量模块不可用 (scripts.layout_quality 无法导入)",
+        )
+
+    result = await compute_task_layout_quality(task, n_sigma=n_sigma)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "该任务未找到版面质量数据: 解析输出目录缺少 "
+                "*_model.json / *_middle.json (解析请求需开启 return_middle_json "
+                "与 return_model_output, 或 return_layout_quality)"
+            ),
+        )
+    return {**result, "task_id": task_id}
 
 
 @app.get(path="/health")
