@@ -66,11 +66,18 @@ class BookAggregator:
 
     # ---- 策略二: 核心页面采样 (剔除空白页/版权页等噪声) ----
     def filter_noise_pages(self, coverage_min=0.10, min_text_blocks=3):
+        """剔除噪声页 (空白页/版权页等无版面信息页)。
+
+        保留判据: 版面覆盖率达标 (cov_ok) 或 文本块数达标 (tb_ok), 满足其一即保留。
+        - 整页表格/图片: coverage 高但 text_blocks=0, 靠 cov_ok 保留 (不再误判为噪声);
+        - 空白页/版权页: coverage 低且文本块不足, 被剔除;
+        - text_blocks 为 None (CSV 输入未提供) 时, 仅按 coverage 判断。
+        """
         kept, dropped = [], []
         for p in self.pages:
             cov_ok = p['coverage'] >= coverage_min
-            tb_ok = (p['text_blocks'] is None) or (p['text_blocks'] >= min_text_blocks)
-            (kept if (cov_ok and tb_ok) else dropped).append(p)
+            tb_ok = (p['text_blocks'] is not None) and (p['text_blocks'] >= min_text_blocks)
+            (kept if (cov_ok or tb_ok) else dropped).append(p)
         self.pages, self.dropped_pages = kept, dropped
         return [p['page_no'] for p in dropped]
 

@@ -173,6 +173,7 @@ class AsyncParseTask:
     return_images: bool
     response_format_zip: bool
     return_original_file: bool
+    return_layout_pdf: bool
     client_side_output_generation: bool
     start_page_id: int
     end_page_id: int
@@ -527,6 +528,7 @@ def create_result_zip(
     return_content_list: bool,
     return_images: bool,
     return_original_file: bool,
+    return_layout_pdf: bool,
     layout_quality: Optional[dict[str, Any]] = None,
 ) -> str:
     zip_fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix="mineru_results_")
@@ -641,17 +643,18 @@ def create_result_zip(
                         ),
                     )
 
-            # Always include layout PDF if it was generated during parsing
-            layout_pdf_path = os.path.join(parse_dir, f"{pdf_name}_layout.pdf")
-            if os.path.exists(layout_pdf_path):
-                zf.write(
-                    layout_pdf_path,
-                    arcname=build_zip_arcname(
-                        pdf_name,
-                        parse_dir,
-                        f"{pdf_name}_layout.pdf",
-                    ),
-                )
+            # Include layout PDF when requested (and it was generated during parsing)
+            if return_layout_pdf:
+                layout_pdf_path = os.path.join(parse_dir, f"{pdf_name}_layout.pdf")
+                if os.path.exists(layout_pdf_path):
+                    zf.write(
+                        layout_pdf_path,
+                        arcname=build_zip_arcname(
+                            pdf_name,
+                            parse_dir,
+                            f"{pdf_name}_layout.pdf",
+                        ),
+                    )
 
             # 整书版面质量评分, 与 middle/model json 同目录 (hybrid_auto 内)
             lq = lq_by_book.pop(pdf_name, None)
@@ -694,6 +697,7 @@ async def build_result_response(
     return_images: bool,
     response_format_zip: bool,
     return_original_file: bool,
+    return_layout_pdf: bool,
     layout_quality: Optional[dict[str, Any]] = None,
     zip_filename: str = "results.zip",
 ) -> Response:
@@ -711,6 +715,7 @@ async def build_result_response(
                 return_content_list=return_content_list,
                 return_images=return_images,
                 return_original_file=return_original_file,
+                return_layout_pdf=return_layout_pdf,
                 layout_quality=layout_quality,
             )
         )
@@ -780,6 +785,7 @@ async def build_sync_file_parse_response(
             return_images=task.return_images,
             response_format_zip=task.response_format_zip,
             return_original_file=task.return_original_file,
+            return_layout_pdf=task.return_layout_pdf,
             layout_quality=task.layout_quality,
             zip_filename=f"{task.task_id}.zip",
         )
@@ -910,7 +916,9 @@ async def run_parse_job(
         table_enable=request_options.table_enable,
         image_analysis=request_options.image_analysis,
         server_url=request_options.server_url,
-        f_draw_layout_bbox=True,
+        f_draw_layout_bbox=(
+            request_options.return_layout_pdf and request_options.response_format_zip
+        ),
         f_draw_span_bbox=False,
         f_dump_md=request_options.return_md,
         # return_layout_quality 开启时强制落盘 middle/model json (评分原料),
@@ -986,6 +994,7 @@ async def create_async_parse_task(
             return_images=request_options.return_images,
             response_format_zip=request_options.response_format_zip,
             return_original_file=request_options.return_original_file,
+            return_layout_pdf=request_options.return_layout_pdf,
             client_side_output_generation=request_options.client_side_output_generation,
             start_page_id=request_options.start_page_id,
             end_page_id=request_options.end_page_id,
@@ -1284,6 +1293,7 @@ class AsyncTaskManager:
             return_images=task.return_images,
             response_format_zip=task.response_format_zip,
             return_original_file=task.return_original_file,
+            return_layout_pdf=task.return_layout_pdf,
             client_side_output_generation=task.client_side_output_generation,
             server_url=task.server_url,
             upload_names=task.upload_names,
@@ -1336,6 +1346,7 @@ class AsyncTaskManager:
             return_images=sqlite_task.return_images,
             response_format_zip=sqlite_task.response_format_zip,
             return_original_file=sqlite_task.return_original_file,
+            return_layout_pdf=sqlite_task.return_layout_pdf,
             client_side_output_generation=sqlite_task.client_side_output_generation,
             start_page_id=sqlite_task.start_page_id,
             end_page_id=sqlite_task.end_page_id,
@@ -1624,6 +1635,7 @@ async def get_async_task_result(
         return_images=task.return_images,
         response_format_zip=task.response_format_zip,
         return_original_file=task.return_original_file,
+        return_layout_pdf=task.return_layout_pdf,
         layout_quality=task.layout_quality,
         zip_filename=f"{task.task_id}.zip",
     )
@@ -1673,6 +1685,14 @@ async def compute_task_layout_quality(
                 )
             )
         except FileNotFoundError:
+            # 解析输出缺少 model/middle json, 属预期情况, 静默跳过
+            continue
+        except Exception as exc:
+            # best-effort: 评分失败 (如去噪后无有效正文页) 不影响解析结果
+            logger.warning(
+                f"Task {task.task_id}: layout quality scoring failed for "
+                f"{pdf_name}: {exc}"
+            )
             continue
     if not books:
         return None

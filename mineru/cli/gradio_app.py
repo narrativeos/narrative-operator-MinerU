@@ -1241,6 +1241,7 @@ async def _run_to_markdown_job(
         return_images=True,
         response_format_zip=True,
         return_original_file=True,
+        return_layout_pdf=True,
         client_side_output_generation=use_client_side_output_generation,
     )
     upload_assets = [

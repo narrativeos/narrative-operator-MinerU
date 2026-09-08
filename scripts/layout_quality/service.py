@@ -21,6 +21,8 @@ __all__ = [
 
 # QA 默认参数（pipeline / cli 从这里复用，保持单一来源）
 DEFAULT_N_SIGMA = 3.0
+# 去噪保留判据: 版面覆盖率 >= DEFAULT_COVERAGE_MIN 或 文本块数 >= DEFAULT_MIN_TEXT_BLOCKS,
+# 满足其一即保留 (整页表格/图片靠覆盖率保留, 空白页/版权页两者都不达标被剔除)。
 DEFAULT_COVERAGE_MIN = 0.10
 DEFAULT_MIN_TEXT_BLOCKS = 3
 

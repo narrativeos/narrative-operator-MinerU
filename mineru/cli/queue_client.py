@@ -104,6 +104,7 @@ async def queue_submit(
                 "return_images": "true",
                 "return_model_output": "true",
                 "return_original_file": "true",
+                "return_layout_pdf": "true",
             }
             resp = await client.post(f"{base_url}/tasks", files=files, data=data, timeout=60.0)
             if resp.status_code == 202:

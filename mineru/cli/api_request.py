@@ -48,6 +48,7 @@ class ParseRequestOptions:
     return_images: bool
     response_format_zip: bool
     return_original_file: bool
+    return_layout_pdf: bool
     client_side_output_generation: bool
     start_page_id: int
     end_page_id: int
@@ -204,6 +205,15 @@ async def parse_request_form(
             ),
         ),
     ] = True,
+    return_layout_pdf: Annotated[
+        bool,
+        Form(
+            description=(
+                "Include the layout-bbox visualization PDF ({name}_layout.pdf) "
+                "in the ZIP result; ignored unless response_format_zip=true"
+            ),
+        ),
+    ] = True,
     client_side_output_generation: Annotated[
         bool,
         Form(
@@ -243,6 +253,7 @@ async def parse_request_form(
         return_images = True
 
     effective_return_original_file = return_original_file and response_format_zip
+    effective_return_layout_pdf = return_layout_pdf and response_format_zip
     # Parse lang_list from comma-separated string
     lang_list_parsed = [lang.strip() for lang in lang_list.split(",") if lang.strip()]
     return ParseRequestOptions(
@@ -263,6 +274,7 @@ async def parse_request_form(
         return_images=return_images,
         response_format_zip=response_format_zip,
         return_original_file=effective_return_original_file,
+        return_layout_pdf=effective_return_layout_pdf,
         client_side_output_generation=client_side_output_generation,
         start_page_id=start_page_id,
         end_page_id=end_page_id,

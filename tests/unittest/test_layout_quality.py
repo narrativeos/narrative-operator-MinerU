@@ -88,6 +88,62 @@ def _make_minimal_hybrid_dir(root, book, x2=515):
     return backend
 
 
+def _make_no_valid_pages_hybrid_dir(root, book):
+    """构造去噪后无有效正文页的 hybrid_auto 目录。
+
+    单页仅 1 个小图块 (非文本类), 文本块数=0 且版面覆盖率极低,
+    会被 filter_noise_pages 全部剔除, 触发 aggregate() 的
+    "去噪后无有效正文页" ValueError (模拟表格/图片为主的试验报告)。
+    """
+    backend = os.path.join(root, book, 'hybrid_auto')
+    os.makedirs(backend)
+    para_blocks = [
+        {'bbox': [100, 100, 140, 140], 'type': 'image', 'angle': 0,
+         'index': 1, 'lines': []},
+    ]
+    middle = {'pdf_info': [{
+        'page_size': [595, 841], 'page_idx': 0,
+        'preproc_blocks': [], 'discarded_blocks': [],
+        'para_blocks': para_blocks,
+    }]}
+    model = [[{'type': 'image', 'bbox': [100 / 595, 100 / 841,
+                                          140 / 595, 140 / 841],
+               'angle': 0, 'content': None}]]
+    with open(os.path.join(backend, f'{book}_middle.json'), 'w') as f:
+        json.dump(middle, f)
+    with open(os.path.join(backend, f'{book}_model.json'), 'w') as f:
+        json.dump(model, f)
+    return backend
+
+
+def _make_full_page_table_hybrid_dir(root, book):
+    """构造整页大表格的 hybrid_auto 目录 (coverage 高 ~0.73, 文本块数=0)。
+
+    模拟试验报告里"整页一个表格"的正常版面: 版面覆盖率达标但无文本块,
+    去噪时应靠 coverage 保留并参与评分 (而非被误判为噪声)。
+    """
+    backend = os.path.join(root, book, 'hybrid_auto')
+    os.makedirs(backend)
+    para_blocks = [
+        {'bbox': [50, 50, 545, 791], 'type': 'table', 'angle': 0, 'index': 1,
+         'lines': [], 'blocks': [{'type': 'table_body',
+                                   'bbox': [50, 50, 545, 791]}]},
+    ]
+    middle = {'pdf_info': [{
+        'page_size': [595, 841], 'page_idx': 0,
+        'preproc_blocks': [], 'discarded_blocks': [],
+        'para_blocks': para_blocks,
+    }]}
+    model = [[{'type': 'table', 'bbox': [50 / 595, 50 / 841,
+                                          545 / 595, 791 / 841],
+               'angle': 0, 'content': None}]]
+    with open(os.path.join(backend, f'{book}_middle.json'), 'w') as f:
+        json.dump(middle, f)
+    with open(os.path.join(backend, f'{book}_model.json'), 'w') as f:
+        json.dump(model, f)
+    return backend
+
+
 class TestAHP(unittest.TestCase):
     def test_builtin_matrices_pass_consistency(self):
         w_b = ahp_weight(B_MATRIX, name='test-B')
@@ -157,6 +213,29 @@ class TestBookAggregator(unittest.TestCase):
         self.assertEqual(dropped, [99])
         self.assertEqual(len(agg.pages), 10)
 
+    def test_filter_noise_pages_keeps_full_page_table_or_image(self):
+        """整页表格/图片 (coverage 高但 text_blocks=0) 不应被误判为噪声,
+        而空白页 (coverage 低且无文本块) 仍应被剔除。"""
+        agg = self._make_book()
+        agg.add_page(50, np.full(N_IND, 0.9), coverage=0.73, text_blocks=0)  # 整页表格
+        agg.add_page(51, np.full(N_IND, 0.9), coverage=0.52, text_blocks=0)  # 整页图片
+        agg.add_page(99, np.zeros(N_IND), coverage=0.02, text_blocks=0)      # 空白页
+        dropped = agg.filter_noise_pages(coverage_min=0.10, min_text_blocks=3)
+        self.assertEqual(dropped, [99])
+        kept_nos = [p['page_no'] for p in agg.pages]
+        self.assertIn(50, kept_nos)
+        self.assertIn(51, kept_nos)
+
+    def test_filter_noise_pages_text_blocks_none_uses_coverage_only(self):
+        """text_blocks 为 None (CSV 未提供) 时, 仅按 coverage 判断。"""
+        agg = self._make_book()
+        agg.add_page(60, np.full(N_IND, 0.9), coverage=0.40, text_blocks=None)  # 保留
+        agg.add_page(61, np.zeros(N_IND), coverage=0.02, text_blocks=None)      # 剔除
+        dropped = agg.filter_noise_pages(coverage_min=0.10, min_text_blocks=3)
+        self.assertEqual(dropped, [61])
+        kept_nos = [p['page_no'] for p in agg.pages]
+        self.assertIn(60, kept_nos)
+
     def test_aggregate_and_stability(self):
         agg = self._make_book()
         agg.filter_noise_pages()
@@ -179,6 +258,18 @@ class TestBookAggregator(unittest.TestCase):
         agg.filter_noise_pages()
         agg.detect_outliers(n_sigma=2.0)
         self.assertIn(20, agg.outliers['页码'].tolist())
+
+    def test_full_page_table_dir_scores_successfully(self):
+        """整页表格 (coverage 高, text_blocks=0) 应参与评分, 不抛"无有效正文页"。"""
+        from scripts.layout_quality.service import analyze_hybrid_dir
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = _make_full_page_table_hybrid_dir(tmp, 'report')
+            result = analyze_hybrid_dir(backend)
+        self.assertEqual(result['book'], 'report')
+        self.assertEqual(result['valid_pages'], 1)
+        self.assertEqual(result['dropped_pages'], [])
+        self.assertTrue(0.0 <= result['score']['value'] <= 1.0)
 class TestDemoPipeline(unittest.TestCase):
     def test_run_demo_self_check(self):
         import tempfile
@@ -648,6 +739,14 @@ async def _fake_run_parse_job(output_dir, uploads, request_options,
     return [upload.stem for upload in uploads]
 
 
+async def _fake_run_parse_job_no_valid_pages(output_dir, uploads, request_options,
+                                             config, progress_callback=None):
+    """假解析作业: 只写去噪后无有效正文页的 hybrid_auto 目录 (评分会抛 ValueError)。"""
+    for upload in uploads:
+        _make_no_valid_pages_hybrid_dir(output_dir, upload.stem)
+    return [upload.stem for upload in uploads]
+
+
 class TestLayoutQualityParseFlow(unittest.TestCase):
     """解析流程 return_layout_quality 选项: 同步 /file_parse 与异步 /tasks。"""
 
@@ -688,6 +787,7 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
             cls.app.state.task_manager = cls._original_tm
 
     def _post_file_parse(self, **extra_form):
+        # 显式关闭所有 return 选项 (不依赖 API 默认值, 避免默认值变更影响用例)
         form = {
             'lang_list': 'ch',
             'backend': 'hybrid-engine',
@@ -695,6 +795,7 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
             'return_md': 'false',
             'return_middle_json': 'false',
             'return_model_output': 'false',
+            'return_layout_quality': 'false',
             'return_content_list': 'false',
             'return_images': 'false',
             'response_format_zip': 'false',
@@ -719,6 +820,7 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
         self.assertNotIn('model_output', data['results']['demo3'])
 
     def test_file_parse_default_no_layout_quality(self):
+        """_post_file_parse 默认关闭 return_layout_quality, 响应不含 layout_quality。"""
         resp = self._post_file_parse()
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn('layout_quality', resp.json())
@@ -738,6 +840,32 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
         self.assertEqual(lq['book'], 'demo3')
         self.assertIn('score', lq)
 
+    def test_file_parse_default_returns_zip(self):
+        """response_format_zip 默认 True (有意设计: zip 可打包所有输出物),
+        不传该参数时 /file_parse 默认返回 zip 而非 JSON。"""
+        import io
+        import zipfile
+        resp = self.client.post(
+            '/file_parse',
+            files=[('files', ('demo3.pdf', _FAKE_PDF_BYTES, 'application/pdf'))],
+            data={
+                'lang_list': 'ch',
+                'backend': 'hybrid-engine',
+                'parse_method': 'auto',
+                'return_md': 'false',
+                'return_middle_json': 'false',
+                'return_model_output': 'false',
+                'return_content_list': 'false',
+                'return_images': 'false',
+                'return_layout_quality': 'false',
+                # 不传 response_format_zip, 验证默认值 (True) 生效
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('application/zip', resp.headers.get('content-type', ''))
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        self.assertIsInstance(zf.namelist(), list)
+
     def test_async_task_result_includes_layout_quality(self):
         resp = self.client.post(
             '/tasks',
@@ -752,6 +880,7 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
                 'return_content_list': 'false',
                 'return_images': 'false',
                 'return_layout_quality': 'true',
+                'response_format_zip': 'false',  # 显式返回 JSON (API 默认已改为 zip)
             },
         )
         self.assertEqual(resp.status_code, 202)
@@ -779,7 +908,7 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
 class TestRunTaskLayoutQualityWiring(unittest.TestCase):
     """真实 AsyncTaskManager._run_task: return_layout_quality 开启时解析后评分。"""
 
-    def _run(self, return_layout_quality):
+    def _run(self, return_layout_quality, fake_job=_fake_run_parse_job):
         import asyncio
         import mineru.cli.fast_api as fa
         from mineru.cli.sqlite_queue import SQLiteQueueManager
@@ -793,6 +922,7 @@ class TestRunTaskLayoutQualityWiring(unittest.TestCase):
             return_model_output=False, return_layout_quality=return_layout_quality,
             return_content_list=False, return_images=False,
             response_format_zip=False, return_original_file=False,
+            return_layout_pdf=False,
             client_side_output_generation=False, start_page_id=0, end_page_id=99999,
             upload_names=['demo3.pdf'], uploads=[os.path.join(tmp, 'demo3.pdf')],
         )
@@ -800,7 +930,7 @@ class TestRunTaskLayoutQualityWiring(unittest.TestCase):
         # 队列持久化重定向到临时 DB, 避免污染开发库
         manager._sqlite = SQLiteQueueManager(db_path=os.path.join(tmp, 'queue.db'))
         original = fa.run_parse_job
-        fa.run_parse_job = _fake_run_parse_job
+        fa.run_parse_job = fake_job
         try:
             asyncio.run(manager._run_task(task))
         finally:
@@ -819,6 +949,69 @@ class TestRunTaskLayoutQualityWiring(unittest.TestCase):
         task = self._run(return_layout_quality=False)
         self.assertEqual(task.status, 'completed')
         self.assertIsNone(task.layout_quality)
+
+    def test_run_task_layout_quality_failure_does_not_fail_task(self):
+        """评分失败 (去噪后无有效正文页, 抛 ValueError) 时任务仍应成功完成,
+        layout_quality 为 None —— best-effort, 评分失败不影响解析结果。"""
+        task = self._run(return_layout_quality=True,
+                         fake_job=_fake_run_parse_job_no_valid_pages)
+        self.assertEqual(task.status, 'completed')
+        self.assertIsNone(task.layout_quality)
+
+
+class TestCreateResultZipLayoutPdf(unittest.TestCase):
+    """create_result_zip: return_layout_pdf 控制 {name}_layout.pdf 是否入 zip。
+
+    与 return_original_file 对称: layout.pdf 只进 zip 不进 JSON, 由
+    return_layout_pdf 开关控制 (默认 True 保持历史行为, 可显式关闭)。
+    """
+
+    def _make_parse_dir_with_layout_pdf(self, tmp):
+        import mineru.cli.fast_api as fa
+        parse_dir = fa.get_parse_dir(tmp, 'demo3', 'hybrid-engine', 'auto')
+        os.makedirs(parse_dir, exist_ok=True)
+        with open(os.path.join(parse_dir, 'demo3_layout.pdf'), 'wb') as f:
+            f.write(b'%PDF-1.4 fake layout pdf')
+        return parse_dir
+
+    def _zip_names(self, tmp, return_layout_pdf):
+        import zipfile
+        import mineru.cli.fast_api as fa
+        zip_path = fa.create_result_zip(
+            tmp, ['demo3'], 'hybrid-engine', 'auto',
+            return_md=False, return_middle_json=False, return_model_output=False,
+            return_content_list=False, return_images=False,
+            return_original_file=False, return_layout_pdf=return_layout_pdf,
+        )
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                return zf.namelist()
+        finally:
+            os.remove(zip_path)
+
+    def test_layout_pdf_included_when_enabled(self):
+        tmp = tempfile.mkdtemp(prefix='lq_zip_on_')
+        try:
+            self._make_parse_dir_with_layout_pdf(tmp)
+            names = self._zip_names(tmp, return_layout_pdf=True)
+            self.assertTrue(
+                any(n.endswith('demo3_layout.pdf') for n in names),
+                f'expected demo3_layout.pdf in zip, got: {names}',
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_layout_pdf_excluded_when_disabled(self):
+        tmp = tempfile.mkdtemp(prefix='lq_zip_off_')
+        try:
+            self._make_parse_dir_with_layout_pdf(tmp)
+            names = self._zip_names(tmp, return_layout_pdf=False)
+            self.assertFalse(
+                any(n.endswith('demo3_layout.pdf') for n in names),
+                f'expected demo3_layout.pdf NOT in zip, got: {names}',
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == '__main__':

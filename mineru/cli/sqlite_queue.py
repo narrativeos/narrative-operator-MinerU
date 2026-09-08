@@ -64,6 +64,7 @@ class SQLiteQueueTask:
         return_images: bool = True,
         response_format_zip: bool = True,
         return_original_file: bool = True,
+        return_layout_pdf: bool = True,
         client_side_output_generation: bool = False,
         server_url: Optional[str] = None,
         upload_names: Optional[list] = None,
@@ -104,6 +105,7 @@ class SQLiteQueueTask:
         self.return_images = return_images
         self.response_format_zip = response_format_zip
         self.return_original_file = return_original_file
+        self.return_layout_pdf = return_layout_pdf
         self.client_side_output_generation = client_side_output_generation
         self.server_url = server_url
         self.upload_names = upload_names or [filename]
@@ -223,6 +225,7 @@ class SQLiteQueueManager:
                 return_images INTEGER DEFAULT 1,
                 response_format_zip INTEGER DEFAULT 1,
                 return_original_file INTEGER DEFAULT 1,
+                return_layout_pdf INTEGER DEFAULT 1,
                 client_side_output_generation INTEGER DEFAULT 0,
                 server_url TEXT,
                 upload_names TEXT,
@@ -242,6 +245,7 @@ class SQLiteQueueManager:
         self._ensure_column("return_images", "INTEGER DEFAULT 1")
         self._ensure_column("response_format_zip", "INTEGER DEFAULT 1")
         self._ensure_column("return_original_file", "INTEGER DEFAULT 1")
+        self._ensure_column("return_layout_pdf", "INTEGER DEFAULT 1")
         self._ensure_column("client_side_output_generation", "INTEGER DEFAULT 0")
         self._ensure_column("server_url", "TEXT")
         self._ensure_column("upload_names", "TEXT")
@@ -307,6 +311,7 @@ class SQLiteQueueManager:
             return_images=bool(d.get("return_images", 1)),
             response_format_zip=bool(d.get("response_format_zip", 1)),
             return_original_file=bool(d.get("return_original_file", 1)),
+            return_layout_pdf=bool(d.get("return_layout_pdf", 1)),
             client_side_output_generation=bool(d.get("client_side_output_generation", 0)),
             server_url=d.get("server_url"),
             upload_names=parse_json(d.get("upload_names")),
@@ -328,11 +333,11 @@ class SQLiteQueueManager:
                     completed_at, error, result_dir, queue_order, file_names,
                     output_dir, return_md, return_middle_json, return_model_output,
                     return_layout_quality, return_content_list, return_images,
-                    response_format_zip, return_original_file,
+                    response_format_zip, return_original_file, return_layout_pdf,
                     client_side_output_generation, server_url,
                     upload_names, uploads, submit_order,
                     progress_percent, current_page, total_pages, current_stage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     filename=excluded.filename, file_size=excluded.file_size,
                     status=excluded.status, backend=excluded.backend,
@@ -351,6 +356,7 @@ class SQLiteQueueManager:
                     return_images=excluded.return_images,
                     response_format_zip=excluded.response_format_zip,
                     return_original_file=excluded.return_original_file,
+                    return_layout_pdf=excluded.return_layout_pdf,
                     client_side_output_generation=excluded.client_side_output_generation,
                     server_url=excluded.server_url, upload_names=excluded.upload_names,
                     uploads=excluded.uploads, submit_order=excluded.submit_order,
@@ -371,7 +377,8 @@ class SQLiteQueueManager:
                 int(task.return_model_output), int(task.return_layout_quality),
                 int(task.return_content_list),
                 int(task.return_images), int(task.response_format_zip),
-                int(task.return_original_file), int(task.client_side_output_generation),
+                int(task.return_original_file), int(task.return_layout_pdf),
+                int(task.client_side_output_generation),
                 task.server_url,
                 json.dumps(task.upload_names) if task.upload_names else None,
                 json.dumps(task.uploads) if task.uploads else None,
