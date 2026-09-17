@@ -22,3 +22,7 @@ class AnalysisResult:
     parse_mode: ResolvedParseMode
     elapsed: float
     layout_geometry: dict[str, Any] | None = None
+    # fork 扩展：block 溯源映射 {str(page_idx): {str(block_index): block_id}}
+    block_id_map: dict[str, dict[str, str]] | None = None
+    # fork 扩展：页面类型分类 {str(page_idx): {"page_type": ..., ...}}
+    page_types: dict[str, dict[str, str]] | None = None

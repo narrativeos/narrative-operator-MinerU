@@ -23,6 +23,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "paper": ("Papers", "论文"),
     "homepage": ("Homepage", "主页"),
     "download": ("Download", "下载"),
+    "header_api_docs_link": ("API Docs", "API 文档"),
     "upload": ("Select a document to parse", "请选择要解析的文件"),
     "tier": ("Parsing tier", "解析等级"),
     "tier_value": ("Parsing tier: {tier}{notice}", "解析等级：{tier}{notice}"),

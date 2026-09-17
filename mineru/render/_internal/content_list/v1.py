@@ -64,8 +64,13 @@ def render_content_list(
         raise TypeError("asset_base_url must be a string")
 
     delimiters = latex_delimiters or LatexDelimitersConfig()
+    # fork 扩展：block 溯源与页面类型（来自 ModelJson extensions，postprocess 透传）
+    extensions = middle_json.extensions or {}
+    block_ids = extensions.get("mineru_block_ids", {})
+    page_types = extensions.get("mineru_page_types", {})
     output: list[dict[str, Any]] = []
     for page in middle_json.pages:
+        page_type_info = page_types.get(str(page.page_idx), {})
         for unit in iter_page_units(page.blocks):
             item = _render_unit(
                 unit,
@@ -74,8 +79,36 @@ def render_content_list(
                 delimiters=delimiters,
             )
             if item is not None:
+                _annotate_traceability(item, unit, block_ids, page_type_info, page.page_idx)
                 output.append(item)
     return output
+
+
+def _annotate_traceability(
+    item: dict[str, Any],
+    unit: PageRenderUnit,
+    block_ids: dict[str, dict[str, str]],
+    page_type_info: dict[str, str],
+    page_idx: int,
+) -> None:
+    """fork 扩展：为 V1 item 写入 ``block_id``/``block_ids`` 与 ``page_type``。
+
+    仅在 extensions 携带对应数据时写入，保持无 fork 扩展时的输出不变。
+    """
+    if page_type_info:
+        item["page_type"] = page_type_info.get("page_type")
+        if page_type_info.get("page_type_secondary"):
+            item["page_type_secondary"] = page_type_info["page_type_secondary"]
+    page_map = block_ids.get(str(page_idx))
+    if not page_map:
+        return
+    if isinstance(unit, ReferenceGroup):
+        ids = [page_map[str(block.index)] for block in unit.blocks if str(block.index) in page_map]
+        if ids:
+            item["block_ids"] = ids
+    else:
+        if block_id := page_map.get(str(unit.index)):
+            item["block_id"] = block_id
 
 
 def _render_unit(

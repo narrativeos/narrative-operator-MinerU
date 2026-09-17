@@ -23,7 +23,7 @@ from mineru.backend.pipeline.page_type_classifier import (
     _MAGAZINE_TOC_LINE_PATTERN,
     _detect_body_start_from_headings,
 )
-from mineru.utils.enum_class import BlockType, PageType
+from mineru.utils.page_type import BlockType, PageType
 
 
 def _assert_page_type(result, expected_primary, expected_secondary=None):
@@ -920,6 +920,98 @@ class TestQgdwStandardPageTypeFixes(unittest.TestCase):
         self.assertEqual(pdf_info[5]["page_type"], PageType.APPENDIX)
         # 编制说明页（正文区之后）不得判 cover
         self.assertNotEqual(pdf_info[6]["page_type"], PageType.COVER)
+
+
+class TestModelListAdapter(unittest.TestCase):
+    """测试 MinerU 4.0 raw model_list 适配层。"""
+
+    def _make_model_list(self):
+        """4 页：封面 / 目录（含乱码块）/ 章节起始 / 正文。"""
+        return [
+            [
+                {"type": BlockType.DOC_TITLE, "index": 0, "bbox": [0.2, 0.3, 0.8, 0.4],
+                 "content": [{"type": "text", "content": "某某标准汇编"}],
+                 "lines": [{"bbox": [0.2, 0.3, 0.8, 0.4]}]},
+                {"type": BlockType.TEXT, "index": 1, "bbox": [0.3, 0.5, 0.7, 0.55],
+                 "content": [{"type": "text", "content": "某某出版社"}],
+                 "lines": [{"bbox": [0.3, 0.5, 0.7, 0.55]}]},
+            ],
+            [
+                {"type": BlockType.INDEX, "index": 0, "bbox": [0.1, 0.1, 0.9, 0.9],
+                 "content": [{"type": "text", "content": "1 范围 …… 1\n2 术语 …… 3\n3 要求 …… 5"}],
+                 "lines": [{"bbox": [0.1, 0.1, 0.9, 0.9]}]},
+                {"type": BlockType.TEXT, "index": 1, "bbox": [0.1, 0.92, 0.2, 0.95],
+                 "content": [{"type": "text", "content": '! " # $ %'}],
+                 "lines": [{"bbox": [0.1, 0.92, 0.2, 0.95]}]},
+            ],
+            [
+                {"type": BlockType.PARAGRAPH_TITLE, "index": 0, "bbox": [0.1, 0.05, 0.6, 0.1],
+                 "content": [{"type": "text", "content": "1 范围"}],
+                 "lines": [{"bbox": [0.1, 0.05, 0.6, 0.1]}]},
+                {"type": BlockType.TEXT, "index": 1, "bbox": [0.1, 0.12, 0.9, 0.6],
+                 "content": [{"type": "text", "content": "本标准规定了某某的要求。"},
+                              {"type": "equation_inline", "content": "$E=mc^2$"}],
+                 "lines": [{"bbox": [0.1, 0.12, 0.9, 0.6]}]},
+                {"type": BlockType.EQUATION, "index": 2, "bbox": [0.3, 0.65, 0.7, 0.7],
+                 "content": "\\frac{a}{b}",
+                 "lines": [{"bbox": [0.3, 0.65, 0.7, 0.7]}]},
+            ],
+            [
+                {"type": BlockType.TEXT, "index": i, "bbox": [0.1, 0.1 + i * 0.2, 0.9, 0.25 + i * 0.2],
+                 "content": [{"type": "text", "content": f"正文第{chr(0x4e00 + i)}段内容。"}],
+                 "lines": [{"bbox": [0.1, 0.1 + i * 0.2, 0.9, 0.25 + i * 0.2]}]}
+                for i in range(4)
+            ],
+        ]
+
+    def test_raw_model_list_to_page_infos(self):
+        from mineru.backend.pipeline.page_type_classifier import raw_model_list_to_page_infos
+
+        model_list = self._make_model_list()
+        infos = raw_model_list_to_page_infos(model_list)
+        self.assertEqual(len(infos), 4)
+        # 单位空间 page_size
+        self.assertEqual(infos[0]["page_size"], [1, 1])
+        # 文本类 block：span 文本拼接（含行内公式）
+        text = infos[2]["preproc_blocks"][1]["lines"][0]["spans"][0]["content"]
+        self.assertEqual(text, "本标准规定了某某的要求。$E=mc^2$")
+        # 公式 block：字符串 content 原样保留
+        self.assertEqual(infos[2]["preproc_blocks"][2]["lines"][0]["spans"][0]["content"], "\\frac{a}{b}")
+
+    def test_hyperlink_span_text(self):
+        from mineru.backend.pipeline.page_type_classifier import _extract_raw_block_text
+
+        block = {
+            "type": BlockType.TEXT,
+            "content": [
+                {"type": "text", "content": "see "},
+                {"type": "hyperlink", "url": "https://example.com",
+                 "content": [{"type": "text", "content": "here"}]},
+            ],
+        }
+        self.assertEqual(_extract_raw_block_text(block), "see here")
+
+    def test_classify_model_list(self):
+        from mineru.backend.pipeline.page_type_classifier import classify_model_list
+
+        model_list = self._make_model_list()
+        page_types = classify_model_list(model_list)
+        self.assertEqual(page_types["0"]["page_type"], PageType.COVER)
+        self.assertEqual(page_types["1"]["page_type"], PageType.TOC)
+        self.assertEqual(page_types["2"]["page_type"], PageType.CHAPTER_START)
+        self.assertEqual(page_types["3"]["page_type"], PageType.BODY)
+
+    def test_remove_garbled_model_blocks(self):
+        from mineru.backend.pipeline.page_type_classifier import remove_garbled_model_blocks
+
+        model_list = self._make_model_list()
+        removed = remove_garbled_model_blocks(model_list)
+        self.assertEqual(removed, 1)
+        # 乱码块（页 1 的 index=1）被删除，index=0 保留
+        self.assertEqual(len(model_list[1]), 1)
+        self.assertEqual(model_list[1][0]["index"], 0)
+        # 公式块（含字母数字）不被误删
+        self.assertEqual(len(model_list[2]), 3)
 
 
 if __name__ == "__main__":

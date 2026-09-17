@@ -234,7 +234,9 @@ def test_doc_analyze_converts_vlm_results_before_downstream_processing(
     assert type(model_json.pages) is list
     assert type(model_json.pages[0]) is list
     assert type(model_json.pages[0][0]) is dict
-    assert model_json.pages == [[{"type": BlockType.PAGE_NUMBER, "bbox": [0.45, 0.9, 0.55, 0.95], "content": inline("1")}]]
+    # fork 扩展：_apply_page_traceability 会为 raw block 附加 block_id，比较前剥离
+    actual_pages = [{k: v for k, v in block.items() if k != "block_id"} for block in model_json.pages[0]]
+    assert actual_pages == [{"type": BlockType.PAGE_NUMBER, "bbox": [0.45, 0.9, 0.55, 0.95], "content": inline("1")}]
     assert model_json.page_index_map == []
     assert model_json.metadata.file_suffix == "pdf"
     assert (

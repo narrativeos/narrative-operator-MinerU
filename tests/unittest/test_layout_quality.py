@@ -908,6 +908,14 @@ class TestLayoutQualityParseFlow(unittest.TestCase):
 class TestRunTaskLayoutQualityWiring(unittest.TestCase):
     """真实 AsyncTaskManager._run_task: return_layout_quality 开启时解析后评分。"""
 
+    @classmethod
+    def setUpClass(cls):
+        # 4.0 架构移除了 mineru/cli/fast_api.py，接线测试待移植到新 CLI 后恢复
+        try:
+            import mineru.cli.fast_api  # noqa: F401
+        except Exception as exc:
+            raise unittest.SkipTest(f'无法导入 mineru.cli.fast_api: {exc}')
+
     def _run(self, return_layout_quality, fake_job=_fake_run_parse_job):
         import asyncio
         import mineru.cli.fast_api as fa
@@ -965,6 +973,14 @@ class TestCreateResultZipLayoutPdf(unittest.TestCase):
     与 return_original_file 对称: layout.pdf 只进 zip 不进 JSON, 由
     return_layout_pdf 开关控制 (默认 True 保持历史行为, 可显式关闭)。
     """
+
+    @classmethod
+    def setUpClass(cls):
+        # 4.0 架构移除了 mineru/cli/fast_api.py，接线测试待移植到新 CLI 后恢复
+        try:
+            import mineru.cli.fast_api  # noqa: F401
+        except Exception as exc:
+            raise unittest.SkipTest(f'无法导入 mineru.cli.fast_api: {exc}')
 
     def _make_parse_dir_with_layout_pdf(self, tmp):
         import mineru.cli.fast_api as fa

@@ -231,11 +231,15 @@ def _render_header() -> str:
         "HEADER_MODEL_LINK": "model",
         "HEADER_PAPER_LINK": "paper",
         "HEADER_HOMEPAGE_LINK": "homepage",
+        "HEADER_API_DOCS_LINK": "header_api_docs_link",
     }.items():
         template = template.replace("{{" + placeholder + "}}", localized_text(key))
     template = template.replace(
         'alt="{{HEADER_STARS_ALT}}"', 'alt="GitHub stars" data-mineru-i18n-attr="alt" data-mineru-i18n-key="stars"'
     )
+    # fork 扩展：API 文档链接指向 FastAPI Swagger 文档（与 3.x 行为一致）
+    api_docs_url = os.environ.get("MINERU_API_DOCS_URL", "http://localhost:8000/docs")
+    template = template.replace("{{HEADER_API_DOCS_URL}}", html.escape(api_docs_url, quote=True))
     rendered = template
     for placeholder, value in values.items():
         rendered = rendered.replace(placeholder, html.escape(value, quote=True))

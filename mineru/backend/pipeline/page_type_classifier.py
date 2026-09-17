@@ -9,7 +9,7 @@
 import re
 from typing import Dict, List, Optional, Set
 
-from mineru.utils.enum_class import BlockType, PageType
+from ...utils.page_type import BlockType, PageType
 
 
 # ─── 阈值常量 ───────────────────────────────────────────────────────────
@@ -357,6 +357,7 @@ def _detect_toc_page_set(pdf_info_list: List[Dict]) -> Set[int]:
         return toc
 
     def _range_lines(r: tuple) -> int:
+        """计算页区间 [r[0], r[1]] 内的文本行总数。"""
         return sum(counts[i] for i in range(r[0] - 1, r[1]))
 
     # 按总行数排序，保留主导区间
@@ -1050,3 +1051,110 @@ def classify_all_pages(pdf_info_list: List[Dict]) -> None:
         else:
             # 清除上一次分类遗留的次要类型，避免陈旧值残留
             page_info.pop("page_type_secondary", None)
+
+
+# ─── MinerU 4.0 raw model_list 适配层 ───────────────────────────────────
+#
+# 4.0 的 ``doc_analyze`` 产出 raw model_list（``list[list[dict]]``），block 形如：
+#   {"type": "text", "index": 0, "bbox": [x0, y0, x1, y1],
+#    "content": [{"type": "text", "content": "..."}, ...],  # 文本类：span 列表
+#    "lines": [{"bbox": [...]}]}
+# 其中 bbox 已归一化到 [0, 1]（unit space）；公式/代码类 block 的 ``content``
+# 为字符串（LaTeX/代码）。
+#
+# 本适配层把 raw model_list 转换为分类器原有的 ``pdf_info_list`` 格式
+# （``preproc_blocks`` + ``lines/spans`` + ``page_size``），复用全部既有规则。
+# 由于 4.0 bbox 为归一化坐标，``page_size`` 取单位空间 ``[1, 1]``，
+# 分类器中的几何计算（面积占比、顶部区域、居中宽度）在单位空间下语义不变。
+
+
+def _extract_raw_span_text(span) -> str:
+    """提取 4.0 raw span 的文本（递归处理 hyperlink 子 span）。"""
+    if not isinstance(span, dict):
+        return ""
+    if span.get("type") == "hyperlink":
+        children = span.get("content")
+        if isinstance(children, list):
+            return "".join(_extract_raw_span_text(child) for child in children)
+        return ""
+    return str(span.get("content", ""))
+
+
+def _extract_raw_block_text(block: Dict) -> str:
+    """提取 4.0 raw block 的全文本。
+
+    - 文本类 block：``content`` 为 span 列表，拼接所有 span 文本；
+    - 公式/代码类 block：``content`` 为字符串（LaTeX/代码），原样返回；
+    - 视觉类 block（image_body 等）：无文本，返回空串。
+    """
+    content = block.get("content")
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_extract_raw_span_text(span) for span in content)
+    return ""
+
+
+def raw_model_list_to_page_infos(model_list: List[List[Dict]]) -> List[Dict]:
+    """把 4.0 raw model_list 转换为分类器所需的 ``pdf_info_list`` 格式。"""
+    page_infos: List[Dict] = []
+    for page_blocks in model_list:
+        preproc_blocks: List[Dict] = []
+        for block in page_blocks:
+            if not isinstance(block, dict):
+                continue
+            legacy_block: Dict = {
+                "type": block.get("type", ""),
+                "bbox": block.get("bbox"),
+            }
+            text = _extract_raw_block_text(block)
+            if text:
+                legacy_block["lines"] = [{"spans": [{"content": text}]}]
+            preproc_blocks.append(legacy_block)
+        page_infos.append(
+            {
+                "preproc_blocks": preproc_blocks,
+                # 4.0 bbox 已归一化到 [0, 1]，单位空间下几何规则语义不变
+                "page_size": [1, 1],
+            }
+        )
+    return page_infos
+
+
+def classify_model_list(model_list: List[List[Dict]]) -> Dict[str, Dict[str, str]]:
+    """对 4.0 raw model_list 做页面类型分类（fork 扩展入口）。
+
+    Returns:
+        ``{str(page_idx): {"page_type": ..., ["page_type_secondary": ...]}}``，
+        供写入 ``ModelJson.extensions["mineru_page_types"]``。
+    """
+    page_infos = raw_model_list_to_page_infos(model_list)
+    classify_all_pages(page_infos)
+    result: Dict[str, Dict[str, str]] = {}
+    for idx, page_info in enumerate(page_infos):
+        entry: Dict[str, str] = {"page_type": page_info.get("page_type", PageType.BODY)}
+        if page_info.get("page_type_secondary"):
+            entry["page_type_secondary"] = page_info["page_type_secondary"]
+        result[str(idx)] = entry
+    return result
+
+
+def remove_garbled_model_blocks(model_list: List[List[Dict]]) -> int:
+    """从 4.0 raw model_list 中删除纯符号乱码 block（fork 扩展入口）。
+
+    与 3.x 的 :func:`remove_garbled_blocks` 规则一致（:func:`_is_garbled_block_text`），
+    但直接操作 raw model_list：原地修改，返回删除的 block 数。
+    视觉类 block 无文本、公式/代码 block 含字母数字，均不会被误删。
+    """
+    removed = 0
+    for page_idx, page_blocks in enumerate(model_list):
+        kept: List[Dict] = []
+        for block in page_blocks:
+            if isinstance(block, dict) and _is_garbled_block_text(_extract_raw_block_text(block)):
+                removed += 1
+            else:
+                kept.append(block)
+        model_list[page_idx] = kept
+    return removed
