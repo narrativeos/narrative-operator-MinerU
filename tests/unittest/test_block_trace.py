@@ -58,6 +58,88 @@ class TestAssignBlockUuids(unittest.TestCase):
         assign_block_uuids_to_model_list(model_list)
         self.assertEqual(model_list[0][0]["block_id"], "custom-id")
 
+    def test_deterministic_across_runs(self):
+        """相同输入的两次独立分配必须得到完全相同的 block_id。"""
+        first = _make_model_list()
+        second = _make_model_list()
+        assign_block_uuids_to_model_list(first)
+        assign_block_uuids_to_model_list(second)
+        for page_a, page_b in zip(first, second):
+            for block_a, block_b in zip(page_a, page_b):
+                self.assertEqual(block_a["block_id"], block_b["block_id"])
+
+    def test_id_changes_with_content(self):
+        model_list = _make_model_list()
+        assign_block_uuids_to_model_list(model_list)
+        original_id = model_list[0][0]["block_id"]
+        model_list[0][0]["content"] = [{"type": "text", "content": "world"}]
+        del model_list[0][0]["block_id"]  # 幂等语义：已有 id 不重算，删除后重新派生
+        assign_block_uuids_to_model_list(model_list)
+        self.assertNotEqual(model_list[0][0]["block_id"], original_id)
+
+    def test_id_differs_across_pages_for_same_content(self):
+        model_list = [
+            [{"type": "text", "index": 0, "content": [{"type": "text", "content": "same"}]}],
+            [{"type": "text", "index": 0, "content": [{"type": "text", "content": "same"}]}],
+        ]
+        assign_block_uuids_to_model_list(model_list)
+        self.assertNotEqual(model_list[0][0]["block_id"], model_list[1][0]["block_id"])
+
+    def test_id_changes_with_bbox(self):
+        model_list = _make_model_list()
+        assign_block_uuids_to_model_list(model_list)
+        original_id = model_list[0][0]["block_id"]
+        model_list[0][0]["bbox"] = [0.2, 0.3, 0.6, 0.4]
+        del model_list[0][0]["block_id"]  # 幂等语义：已有 id 不重算，删除后重新派生
+        assign_block_uuids_to_model_list(model_list)
+        self.assertNotEqual(model_list[0][0]["block_id"], original_id)
+
+    def test_id_tolerates_bbox_jitter_below_precision(self):
+        """bbox 抖动小于 1e-5（精度舍入范围内）时 id 保持不变。"""
+        stable = [
+            [{"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2],
+              "content": [{"type": "text", "content": "hello"}]}]
+        ]
+        jittered = [
+            [{"type": "text", "index": 0, "bbox": [0.100001, 0.099999, 0.500004, 0.199996],
+              "content": [{"type": "text", "content": "hello"}]}]
+        ]
+        assign_block_uuids_to_model_list(stable)
+        assign_block_uuids_to_model_list(jittered)
+        self.assertEqual(stable[0][0]["block_id"], jittered[0][0]["block_id"])
+
+    def test_id_stable_when_index_shifts(self):
+        """前序 block 增删导致 index 位移时，已有 block 的 id 保持不变。"""
+        base = [
+            {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2],
+             "content": [{"type": "text", "content": "first"}]},
+            {"type": "text", "index": 1, "bbox": [0.1, 0.3, 0.5, 0.4],
+             "content": [{"type": "text", "content": "second"}]},
+        ]
+        shifted = [
+            {"type": "text", "index": 0, "bbox": [0.9, 0.9, 0.95, 0.95],
+             "content": [{"type": "text", "content": "inserted"}]},
+            {"type": "text", "index": 1, "bbox": [0.1, 0.1, 0.5, 0.2],
+             "content": [{"type": "text", "content": "first"}]},
+            {"type": "text", "index": 2, "bbox": [0.1, 0.3, 0.5, 0.4],
+             "content": [{"type": "text", "content": "second"}]},
+        ]
+        assign_block_uuids_to_model_list([base])
+        assign_block_uuids_to_model_list([shifted])
+        self.assertEqual(base[0]["block_id"], shifted[1]["block_id"])
+        self.assertEqual(base[1]["block_id"], shifted[2]["block_id"])
+
+    def test_id_differs_without_bbox_at_different_positions(self):
+        """无 bbox 时回退为页内位置序号，同内容不同位置仍不冲突。"""
+        model_list = [
+            [
+                {"type": "text", "content": [{"type": "text", "content": "same"}]},
+                {"type": "text", "content": [{"type": "text", "content": "same"}]},
+            ]
+        ]
+        assign_block_uuids_to_model_list(model_list)
+        self.assertNotEqual(model_list[0][0]["block_id"], model_list[0][1]["block_id"])
+
 
 class TestBuildBlockIdMap(unittest.TestCase):
     """测试 block_id 映射构建。"""
