@@ -94,6 +94,7 @@ nav:
     - Reference:
       - Reference: reference/index.md
       - Migration to 4.0: reference/migration_4.md
+      - Interface Migration: reference/api_migration.md
       - Output File Format: reference/output_files.md
       - Changelog: reference/changelog.md
     - FAQ:
@@ -117,6 +118,7 @@ nav:
   - Reference:
     - Reference: reference/index.md
     - Migration to 4.0: reference/migration_4.md
+    - Interface Migration: reference/api_migration.md
     - Output File Format: reference/output_files.md
     - Changelog: reference/changelog.md
   - FAQ:
@@ -153,6 +155,7 @@ plugins:
             V1 HTTP API: V1 HTTP API
             Legacy Platforms (MinerU <4): 旧平台适配（MinerU <4）
             Migration to 4.0: 迁移到 4.0
+            Interface Migration: 接口迁移说明
             Model Source: 模型源配置
             Advanced CLI Parameters: 命令行进阶参数
             FAQ: 常见问题解答
