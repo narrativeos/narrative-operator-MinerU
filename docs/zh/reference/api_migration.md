@@ -103,8 +103,10 @@ curl -fsSL "$BASE/v1/files/$MD_ID/content" -o document.md
 | `file`（multipart） | `files[].source` | `file_id` / `url` / `inline` / `local`（仅本地服务） |
 | `page_range` | `files[].page_range` | `1-5,8,r3-r1`；`r1` 为末页，`all` 为全部 |
 | `return_type` | `output_formats` | `markdown` / `middle_json` / `structured_content` / `zip` |
+| `return_layout_pdf` | `output_formats` 中的 `layout_pdf` | 3.x 在 zip 内附带 `layout.pdf`；4.0 改为独立产物 `{文件名}.layout.pdf`（仅本地服务、仅 PDF 输入） |
 | `lang` | （移除） | 4.0 自动识别语言 |
 | `formula_enable` / `table_enable` | （移除） | 由 `tier` 决定 |
+| 结果中的 `img_path` | `image_path` / `image_source.path` | 3.x 图片块顶层 `img_path` 键在 4.0 图片块 schema 中改名为 `image_path`（相对路径）或 `image_source.path`（绝对路径）；读取旧缓存/旧结果的代码需按新键取值 |
 
 ### 2.5 移除的端点与行为
 
@@ -112,6 +114,8 @@ curl -fsSL "$BASE/v1/files/$MD_ID/content" -o document.md
 - parse job SSE 事件流（`GET /v1/parse/jobs/{id}/events`）
 - `POST /v1/parse/jobs` 的 `wait` 参数——V1 始终异步，创建即返回 `202`，客户端自行轮询
 - 独立 `images` 输出格式——图片只通过 `zip` 产物返回
+- 3.x 任务级细粒度进度字段（`progress_percent` / `current_page` / `total_pages` / `current_stage`）——4.0 默认只返回 job 级文件计数（`progress.completed/failed/total`）；本地服务的 PDF 文件在运行期间通过 `files[].progress`（`current_page` / `total_pages` / `stage`）提供页级进度，见 [parse-jobs 文档](../../next/api/parse-jobs.md)
+- 3.x 结果图片块的顶层 `img_path` 键——4.0 图片块使用 `image_path` / `image_source.path`，见 2.4 参数映射
 
 ## 3. Python SDK
 

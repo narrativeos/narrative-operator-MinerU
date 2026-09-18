@@ -1,5 +1,10 @@
 # 队列服务模式
 
+> **⚠️ 已废弃（4.0 未实现）**：本文档描述的是 3.x fork 的 SQLite 队列服务。
+> 4.0 代码库中**没有**该服务的实现（`mineru/cli/queue_client.py` 为遗留孤儿模块，无调用方），
+> 本文档仅保留作历史参考。4.0 的异步任务能力由
+> [Local Parse Server 的 parse jobs](../../next/api/parse-jobs.md)（并发槽位 + SQLite 任务持久化）提供。
+
 队列服务允许将文档解析任务提交到 SQLite 队列中，由消费者异步处理，支持高并发场景。
 
 ## 架构说明

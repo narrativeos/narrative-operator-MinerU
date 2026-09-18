@@ -143,6 +143,7 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 | `middle_json` | 文本 | 完整 Middle JSON，中间结构和高级调试。 | 否 |
 | `structured_content` | 文本 | 面向 Agent 和新客户端的结构化内容 JSON。 | 否 |
 | `layout_quality` | 文本 | 版面质量评分 JSON（fork 扩展，仅 Local Parse Server）。 | 否 |
+| `layout_pdf` | 二进制 | 在原始 PDF 上绘制版面框的可视化 PDF（fork 扩展，仅 Local Parse Server，仅 PDF 输入）。 | 否 |
 | `html` | 文本 | HTML 导出。 | 是 |
 | `latex` | 文本 | LaTeX 导出。 | 是 |
 | `docx` | 二进制 | Word 文档导出。 | 是 |
@@ -167,6 +168,40 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 - **评分失败不影响解析产物**：去噪后无有效正文页等评分异常只记录服务端告警，
   文件仍为 `completed`，仅 `output_files.layout_quality` 字段缺省。
   客户端应把该字段按可选字段处理。
+
+### `layout_pdf`（fork 扩展，仅 Local Parse Server）
+
+在**原始完整 PDF** 上按解析结果绘制版面框（block 边框 + 类型标签），
+产物为 `{文件名}.layout.pdf`。用于人工核对版面识别质量。
+
+- 请求：`output_formats` 中加入 `"layout_pdf"`。
+- 仅 PDF 输入生效；非 PDF 文件不产出该字段。
+- 使用 `page_range` 时只叠加选中页，未解析页原样保留。
+- **绘制失败不影响解析产物**：只记录服务端告警，文件仍为 `completed`，
+  仅 `output_files.layout_pdf` 字段缺省。客户端应把该字段按可选字段处理。
+
+### PDF 页级进度（fork 扩展，仅 Local Parse Server）
+
+任务运行期间，`files[]` 中的 PDF 文件会携带 `progress` 字段报告页级进度：
+
+```json
+{
+  "name": "report.pdf",
+  "status": "queued",
+  "progress": {
+    "current_page": 64,
+    "total_pages": 120,
+    "stage": "inference"
+  }
+}
+```
+
+- `current_page`：0 基的下一个待处理页索引；`total_pages` 为本次解析的总页数。
+- `stage`：`prepare`（页面渲染准备）、`inference`（模型推理）、
+  `postprocess`（窗口内回填）、`done`（全部页面完成）。
+- 进度按处理窗口（默认 64 页）推进，非逐页实时。
+- 仅 PDF 输入产生该字段；文件进入 `completed`/`failed` 终态后 `progress` 为 `null`。
+- 客户端应按可选字段处理，进度百分比可估算为 `current_page / total_pages`。
 
 ### 创建响应
 
@@ -370,7 +405,7 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 Local Parse Server 的任务 API 与官方 API 保持同一结构，但有以下实现差异:
 
 - 不支持 Webhook 时，`health.features.webhook` 必须为 `false`；收到 `callback` 时应返回 `400 invalid_request` 或明确忽略。
-- `health.features.output_formats` 必须反映本地 server 实际支持的输出格式；当前本地实现支持 `markdown`、`middle_json`、`structured_content`、`layout_quality` 和 `zip`。
+- `health.features.output_formats` 必须反映本地 server 实际支持的输出格式；当前本地实现支持 `markdown`、`middle_json`、`structured_content`、`layout_quality`、`layout_pdf` 和 `zip`。
 - **Job 持久化（fork 扩展）**：`--job-db-path` 指定 SQLite 文件路径后，parse job 记录持久化到该文件；默认空值表示不持久化（纯内存，重启后任务列表为空）。重启后历史任务从 SQLite 恢复，其中重启前处于 `queued`/`running` 的任务无法继续执行，会被标记为 `failed`（并补 `finished_at`）以便客户端感知；`completed`/`partial`/`failed`/`canceled` 等终态任务原样恢复（状态、进度与 `output_files` 引用保留）。
   注意：Files API 的文件元数据是内存态，**重启后已恢复任务的产物 `file_id` 无法再下载**（返回 `404 file_not_found`）。需要保留产物的客户端应在重启前下载，或重启后重新提交任务。
 - `health.features.sources` 必须反映本地 server 实际允许的 source 类型；只有启动时开启 `--allow-local-source` 才包含 `local`。
