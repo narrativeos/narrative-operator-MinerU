@@ -142,6 +142,7 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 | `markdown` | 文本 | Markdown 文本。 | 否 |
 | `middle_json` | 文本 | 完整 Middle JSON，中间结构和高级调试。 | 否 |
 | `structured_content` | 文本 | 面向 Agent 和新客户端的结构化内容 JSON。 | 否 |
+| `layout_quality` | 文本 | 版面质量评分 JSON（fork 扩展，仅 Local Parse Server）。 | 否 |
 | `html` | 文本 | HTML 导出。 | 是 |
 | `latex` | 文本 | LaTeX 导出。 | 是 |
 | `docx` | 二进制 | Word 文档导出。 | 是 |
@@ -154,6 +155,18 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 客户端应以 `GET /v1/health` 返回的 `features.output_formats` 作为当前部署实际支持格式。Local Parse Server 可以只暴露基础格式。
 
 `json`、`content_list_v2` 不是 NEXT 版正式格式名，不进入公开格式集合。命名决策见 [ADR-0001](../decisions/0001-json-output-formats.md)。
+
+### `layout_quality`（fork 扩展，仅 Local Parse Server）
+
+对解析结果计算版面质量评分，产物为 `{文件名}.layout_quality.json`，
+评分维度与 CLI 用法见 [layout_quality 使用文档](../../zh/usage/layout_quality.md)。
+
+- 请求：`output_formats` 中加入 `"layout_quality"`。
+- 响应：终态响应的 `output_files.layout_quality` 返回
+  `{"file_id": "...", "bytes": ...}`，内容通过 Files API 下载。
+- **评分失败不影响解析产物**：去噪后无有效正文页等评分异常只记录服务端告警，
+  文件仍为 `completed`，仅 `output_files.layout_quality` 字段缺省。
+  客户端应把该字段按可选字段处理。
 
 ### 创建响应
 
@@ -357,7 +370,9 @@ OCR 策略和图片分析能力由 `tier` 与服务端实际引擎自动决定�
 Local Parse Server 的任务 API 与官方 API 保持同一结构，但有以下实现差异:
 
 - 不支持 Webhook 时，`health.features.webhook` 必须为 `false`；收到 `callback` 时应返回 `400 invalid_request` 或明确忽略。
-- `health.features.output_formats` 必须反映本地 server 实际支持的输出格式；当前本地实现支持 `markdown`、`middle_json`、`structured_content` 和 `zip`。
+- `health.features.output_formats` 必须反映本地 server 实际支持的输出格式；当前本地实现支持 `markdown`、`middle_json`、`structured_content`、`layout_quality` 和 `zip`。
+- **Job 持久化（fork 扩展）**：`--job-db-path` 指定 SQLite 文件路径后，parse job 记录持久化到该文件；默认空值表示不持久化（纯内存，重启后任务列表为空）。重启后历史任务从 SQLite 恢复，其中重启前处于 `queued`/`running` 的任务无法继续执行，会被标记为 `failed`（并补 `finished_at`）以便客户端感知；`completed`/`partial`/`failed`/`canceled` 等终态任务原样恢复（状态、进度与 `output_files` 引用保留）。
+  注意：Files API 的文件元数据是内存态，**重启后已恢复任务的产物 `file_id` 无法再下载**（返回 `404 file_not_found`）。需要保留产物的客户端应在重启前下载，或重启后重新提交任务。
 - `health.features.sources` 必须反映本地 server 实际允许的 source 类型；只有启动时开启 `--allow-local-source` 才包含 `local`。
 - `local` source 可以不生成输入 `file_id`；响应中应保留 `name` 和文件级状态。
 - 对 PDF/image，省略 `tier` 或传 `null` 时，只能按默认选择策略选择本地可发现的非 `flash` 质量 tier，不能回退到 `flash`；如果只有 `flash` 可用，应返回 `quality_tier_unavailable`。
