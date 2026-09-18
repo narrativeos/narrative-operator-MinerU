@@ -76,3 +76,4 @@ debug_vlm.py
 
 htmlcov/
 .zcode/
+blobs/
