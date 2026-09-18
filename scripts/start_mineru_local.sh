@@ -114,26 +114,25 @@ detect_and_install_vlm_engine() {
       echo "[ok] Project dependencies installed"
     fi
 
-    local vllm_compat
-    vllm_compat=$(python -c "
+    # Apple Silicon: use the MLX engine. vllm-metal has no Qwen2-VL multimodal
+    # adapter, so the default MinerU model cannot run image inference under vLLM.
+    local mlx_vlm_ok
+    mlx_vlm_ok=$(python -c "
 import importlib.util, importlib.metadata as m
 from packaging.version import Version
-if importlib.util.find_spec('vllm') is None:
+if importlib.util.find_spec('mlx_vlm') is None:
     raise SystemExit(1)
-raise SystemExit(0 if Version(m.version('vllm').split('+')[0]) >= Version('0.24') else 1)
+v = Version(m.version('mlx-vlm'))
+raise SystemExit(0 if Version('0.7.0') <= v < Version('0.8.0') else 1)
 " 2>/dev/null && echo 1 || echo 0)
 
-    if [[ "$vllm_compat" != "1" ]]; then
-      echo "[info] Installing vLLM 0.29.0 (Metal) for Apple Silicon (prebuilt wheels)..."
-      local vllm_wheel="https://github.com/vllm-project/vllm/releases/download/v0.29.0/vllm-0.29.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
-      local metal_wheel="https://github.com/vllm-project/vllm-metal/releases/download/v0.29.0/vllm_metal-0.29.0-cp312-cp312-macosx_15_0_arm64.whl"
-      if ! $install_cmd "$vllm_wheel" "$metal_wheel"; then
-        echo "[warn] Failed to install vLLM/vllm-metal. Install manually:" >&2
-        echo "       $install_cmd <vllm-wheel> <vllm-metal-wheel>" >&2
-        echo "       vllm: $vllm_wheel" >&2
-        echo "       metal: $metal_wheel" >&2
+    if [[ "$mlx_vlm_ok" != "1" ]]; then
+      echo "[info] Installing mlx-vlm 0.7.1 for Apple Silicon..."
+      if ! $install_cmd "mlx-vlm==0.7.1"; then
+        echo "[warn] Failed to install mlx-vlm. Install manually:" >&2
+        echo "       $install_cmd mlx-vlm==0.7.1" >&2
       else
-        echo "[ok] vllm + vllm-metal installed successfully"
+        echo "[ok] mlx-vlm installed successfully"
       fi
     fi
   elif command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
@@ -176,6 +175,17 @@ export MINERU_MODEL_SOURCE="modelscope"
 GPU_MEMORY_UTILIZATION="${MINERU_GPU_MEMORY_UTILIZATION:-0.4}"
 DATA_PARALLEL_SIZE="${MINERU_DATA_PARALLEL_SIZE:-1}"
 MAX_PAGES="${MINERU_MAX_PAGES:-}"
+
+# VLM inference engine: auto, vllm, lmdeploy, mlx.
+# On Apple Silicon, default to mlx: vllm-metal has no Qwen2-VL multimodal
+# adapter, so the default MinerU model cannot run image inference under vLLM.
+if [[ -n "${MINERU_VLM_ENGINE:-}" ]]; then
+  VLM_ENGINE="$MINERU_VLM_ENGINE"
+elif [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+  VLM_ENGINE="mlx"
+else
+  VLM_ENGINE="auto"
+fi
 
 # Preferred ports (8400-8499 range)
 GRADIO_PORT="${MINERU_GRADIO_PORT:-8400}"
@@ -229,6 +239,15 @@ pick_port() {
   echo "$selected_port"
 }
 
+build_vlm_server_args() {
+  local port="$1"
+  VLM_SERVER_ARGS=(--engine "$VLM_ENGINE" --host 0.0.0.0 --port "$port")
+  # mlx-vlm's server does not accept vllm-specific scheduling flags.
+  if [[ "$VLM_ENGINE" != "mlx" ]]; then
+    VLM_SERVER_ARGS+=(--data-parallel-size "$DATA_PARALLEL_SIZE" --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
+  fi
+}
+
 start_gradio() {
   local selected_gradio_port
   selected_gradio_port="$(pick_port "$GRADIO_PORT" "gradio")"
@@ -244,11 +263,8 @@ start_openai() {
   local selected_openai_port
   selected_openai_port="$(pick_port "$OPENAI_PORT" "openai")"
   echo "[start] openai server on :${selected_openai_port}"
-  mineru-kit vlm-server \
-    --host 0.0.0.0 \
-    --port "$selected_openai_port" \
-    --data-parallel-size "$DATA_PARALLEL_SIZE" \
-    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
+  build_vlm_server_args "$selected_openai_port"
+  mineru-kit vlm-server "${VLM_SERVER_ARGS[@]}"
 }
 
 print_usage() {
@@ -269,6 +285,7 @@ fi
 echo "[info] working dir: $ROOT_DIR"
 echo "[info] python: $(command -v python)"
 echo "[info] model source: $MINERU_MODEL_SOURCE"
+echo "[info] vlm-engine: $VLM_ENGINE"
 echo "[info] gpu-memory-utilization: $GPU_MEMORY_UTILIZATION"
 echo "[info] data-parallel-size: $DATA_PARALLEL_SIZE"
 
@@ -297,7 +314,8 @@ case "$MODE" in
     trap cleanup INT TERM
 
     echo "[start] openai server on :${selected_openai_port}"
-    mineru-kit vlm-server --host 0.0.0.0 --port "$selected_openai_port" --data-parallel-size "$DATA_PARALLEL_SIZE" --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" &
+    build_vlm_server_args "$selected_openai_port"
+    mineru-kit vlm-server "${VLM_SERVER_ARGS[@]}" &
     pids+=("$!")
 
     # The API server uses the local VLM server for Standard/Advanced inference.
@@ -337,7 +355,8 @@ case "$MODE" in
     trap cleanup INT TERM
 
     echo "[start] openai server on :${selected_openai_port}"
-    mineru-kit vlm-server --host 0.0.0.0 --port "$selected_openai_port" --data-parallel-size "$DATA_PARALLEL_SIZE" --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" &
+    build_vlm_server_args "$selected_openai_port"
+    mineru-kit vlm-server "${VLM_SERVER_ARGS[@]}" &
     pids+=("$!")
 
     # The web UI auto-starts its own managed V1 API server and uses the local
