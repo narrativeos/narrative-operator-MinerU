@@ -45,6 +45,16 @@ bash scripts/start_mineru_local.sh --help
 
 首次运行 Standard/Advanced 相关服务时会按当前模型源自动下载所需模型（VLM 权重约 2.15 GB），也可提前执行 `mineru-kit models download --tier standard` 完成下载。
 
+### macOS 上的 VLM 引擎（mlx）
+
+在 Apple Silicon 上，脚本默认以 `--engine mlx` 启动 `vlm-server`（可用 `MINERU_VLM_ENGINE` 覆盖）。原因：
+
+- `api` / `all` / `openai` 模式依赖**独立 VLM 服务**（OpenAI 兼容端点）。`vlm-server` 只支持 `vllm` / `lmdeploy` / `mlx`，**没有 llama.cpp 独立服务**。
+- macOS 上 `vllm-metal` 无 Qwen2-VL 多模态支持，`lmdeploy` 非 macOS 目标路径，因此 **mlx 是该形态下唯一可用的引擎**（全精度权重，需 `mlx-vlm>=0.7.0,<0.8.0`，脚本自动安装）。
+- `llama.cpp`（Q8_0 量化）是 upstream 的 macOS 默认，但只能**内联**运行（`api-server` 不传 `--vlm-server-url` 时），无法提供独立服务，故不用于 `api` 模式。
+
+选型对比与决策背景见 [ADR-0035](docs/next/decisions/0035-macos-vlm-engine-mlx.md)。
+
 ## 3. 常用启动命令
 
 只启动 Gradio：

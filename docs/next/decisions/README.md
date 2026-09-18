@@ -62,6 +62,7 @@
 | [ADR-0032](0032-ofd-native-fixed-layout-parsing.md) | Accepted | OFD 原生固定版式 Flash 解析 |
 | [ADR-0033](0033-middle-json-inline-spans.md) | Accepted | Middle JSON 2.0 结构化行内 Span |
 | [ADR-0034](0034-tsv-independent-file-suffix.md) | Accepted | TSV 独立文件后缀 |
+| [ADR-0035](0035-macos-vlm-engine-mlx.md) | Accepted | macOS 本地部署 VLM 引擎选择（mlx 独立服务） |
 
 ## 模板
 
