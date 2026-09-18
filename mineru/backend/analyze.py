@@ -15,7 +15,7 @@ from ..types import FILE_SUFFIXES, FileSuffix, MiddleJson, ModelJson
 from ..utils.async_utils import run_sync
 from ..utils.logger import configure_global_log_level
 from ..version import __version__ as mineru_version
-from .analysis.contracts import AnalysisResult, AnalyzeEffort, OfficeSuffix, ParseMode
+from .analysis.contracts import AnalysisResult, AnalyzeEffort, OfficeSuffix, PageProgressCallback, ParseMode
 
 _SUPPORTED_ANALYZE_EFFORTS = {"flash", "medium", "high", "xhigh"}
 
@@ -39,8 +39,12 @@ def doc_analyze(
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
     source_properties: DocumentProperties | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> tuple[MiddleJson, ModelJson]:
-    """生产严格 ModelJson，并在统一边界构造严格 MiddleJson。"""
+    """生产严格 ModelJson，并在统一边界构造严格 MiddleJson。
+
+    fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件。
+    """
     configure_global_log_level()
     _validate_analyze(effort, file_suffix, page_index_map)
 
@@ -56,6 +60,7 @@ def doc_analyze(
             parse_mode=parse_mode,
             image_analysis=image_analysis,
             vlm_config=vlm_config,
+            progress_callback=progress_callback,
         )
     elif file_suffix in ("csv", "tsv"):
         from .analysis.csv import analyze_csv
@@ -101,8 +106,12 @@ async def aio_doc_analyze(
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
     source_properties: DocumentProperties | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> tuple[MiddleJson, ModelJson]:
-    """vLLM/HTTP 的 PDF 分析使用原生异步编排，其余路径保持受控线程回退。"""
+    """vLLM/HTTP 的 PDF 分析使用原生异步编排，其余路径保持受控线程回退。
+
+    fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件。
+    """
     configure_global_log_level()
     _validate_analyze(effort, file_suffix, page_index_map)
     native_async = False
@@ -122,6 +131,7 @@ async def aio_doc_analyze(
             source_context=source_context,
             vlm_config=vlm_config,
             source_properties=source_properties,
+            progress_callback=progress_callback,
         )
     if source_properties is None:
         source_properties = await run_sync(read_source_properties, file_bytes, file_suffix, source_context)
@@ -134,6 +144,7 @@ async def aio_doc_analyze(
         parse_mode=parse_mode,
         image_analysis=image_analysis,
         vlm_config=vlm_config,
+        progress_callback=progress_callback,
     )
     await run_sync(_apply_page_traceability, result)
     model_json = await run_sync(_build_model_json, result, file_suffix, page_index_map, source_properties)
@@ -181,11 +192,7 @@ def _model_json_for_postprocess(model_json: ModelJson) -> ModelJson:
     （``extra='forbid'``），postprocess 前必须剥离 ``block_id``；
     返回给调用方的 ModelJson（model_output.json）仍保留 ``block_id``。
     """
-    has_block_id = any(
-        isinstance(block, dict) and "block_id" in block
-        for page in model_json.pages
-        for block in page
-    )
+    has_block_id = any(isinstance(block, dict) and "block_id" in block for page in model_json.pages for block in page)
     if not has_block_id:
         return model_json
     from ..utils.block_trace import strip_block_ids_from_model_list

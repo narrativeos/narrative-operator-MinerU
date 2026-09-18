@@ -6,6 +6,7 @@ from typing import Literal
 
 from docvortex.document.contracts import HtmlSourceContext
 
+from ..backend.analysis.contracts import PageProgressCallback
 from ..config import VlmConfig
 from ..utils.logger import configure_global_log_level
 from ..types import Tier
@@ -16,6 +17,7 @@ from .tier import backend_for_tier
 
 __all__ = [
     "ApiJobStatus",
+    "PageProgressCallback",
     "backend_for_tier",
     "DocumentParser",
     "MinerUApiParser",
@@ -36,11 +38,17 @@ def parse(
     page_range: str = "",
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> ParseResult:
-    """同步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。"""
+    """同步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。
+
+    fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件
+    ``(current_page, total_pages, stage)``，stage 为
+    ``prepare``/``inference``/``postprocess``/``done``。
+    """
     configure_global_log_level()
     parser = MinerUParser(tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config)
-    return parser.parse(path, page_range=page_range, source_context=source_context)
+    return parser.parse(path, page_range=page_range, source_context=source_context, progress_callback=progress_callback)
 
 
 async def parse_async(
@@ -52,8 +60,16 @@ async def parse_async(
     page_range: str = "",
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> ParseResult:
-    """异步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。"""
+    """异步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。
+
+    fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件
+    ``(current_page, total_pages, stage)``，stage 为
+    ``prepare``/``inference``/``postprocess``/``done``。
+    """
     configure_global_log_level()
     parser = MinerUParser(tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config)
-    return await parser.parse_async(path, page_range=page_range, source_context=source_context)
+    return await parser.parse_async(
+        path, page_range=page_range, source_context=source_context, progress_callback=progress_callback
+    )

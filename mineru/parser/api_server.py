@@ -90,6 +90,7 @@ _LOCAL_PARSE_OUTPUT_FORMATS: tuple[OutputFormat, ...] = (
     "middle_json",
     "structured_content",
     "layout_quality",
+    "layout_pdf",
     "zip",
 )
 _BASE_PARSE_SOURCES: tuple[SourceType, ...] = ("file_id", "url", "inline")
@@ -152,6 +153,7 @@ OutputFormat = Literal[
     "middle_json",
     "structured_content",
     "layout_quality",
+    "layout_pdf",
     "html",
     "latex",
     "docx",
@@ -523,10 +525,20 @@ class OutputFiles(BaseModel):
     middle_json: OutputFileRef | None = None
     structured_content: OutputFileRef | None = None
     layout_quality: OutputFileRef | None = None
+    layout_pdf: OutputFileRef | None = None
     html: OutputFileRef | None = None
     latex: OutputFileRef | None = None
     docx: OutputFileRef | None = None
     zip: OutputFileRef | None = None
+
+
+class FileProgress(BaseModel):
+    """fork 扩展：PDF 页级进度，仅 job running 且文件未达终态期间出现。"""
+
+    model_config = _PYDANTIC_CONFIG
+    current_page: int = 0
+    total_pages: int = 0
+    stage: str = ""
 
 
 class JobFileResult(BaseModel):
@@ -537,6 +549,7 @@ class JobFileResult(BaseModel):
     status: FileStatus
     parse: FileParseInfo | None = None
     output_files: OutputFiles | None = None
+    progress: FileProgress | None = None
     error: ErrorDetail | None = None
 
 
@@ -994,6 +1007,27 @@ def _build_self_contained_zip_output(result: ParseResult) -> bytes:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         result.save(_ZipDataWriter(zf))
     return buf.getvalue()
+
+
+def _render_layout_pdf_bytes(pdf_bytes: bytes, result: ParseResult, page_range: str) -> bytes:
+    """fork 扩展：在原始完整 PDF 上绘制版面框，未解析页原样保留。
+
+    ``page_range`` 为请求中的原始页范围（可含 rN）；解析结果页 idx 是重写后
+    PDF 内的 0 基索引，这里构造 原始页 -> 解析页 的反向映射交给共享绘制能力。
+    """
+    from docvortex.document.pdf import PDFDocument
+    from docvortex.visualization import render_layout_pdf
+
+    from .page_range import parse_page_range
+
+    with PDFDocument(pdf_bytes) as doc:
+        page_count = doc.page_count
+    selected = parse_page_range(page_range, page_count)
+    sentinel = page_count  # 不匹配任何解析页 idx 的值，对应页原样保留
+    page_indices = [sentinel] * page_count
+    for parse_idx, original_idx in enumerate(selected):
+        page_indices[original_idx] = parse_idx
+    return render_layout_pdf(pdf_bytes, result.middle_json.pages, page_indices=page_indices)
 
 
 def _compute_layout_quality(result: ParseResult, book_name: str) -> dict:
@@ -1626,6 +1660,13 @@ async def _run_job(
                         local_resource_root=extracted.local_resource_root,
                         transport_encoding=extracted.transport_encoding,
                     )
+
+                # fork 扩展：PDF 页级进度写入文件记录；回调异常由管线侧兜底。
+                def _on_page_progress(current_page: int, total_pages: int, stage: str) -> None:
+                    fr.progress = FileProgress(current_page=current_page, total_pages=total_pages, stage=stage)
+                    if job_store is not None:
+                        job_store._persist(rec)
+
                 result = await parse_async(
                     str(tmp_path),
                     tier=effective_tier,
@@ -1634,6 +1675,7 @@ async def _run_job(
                     page_range=page_range,
                     source_context=source_context,
                     vlm_config=vlm_config,
+                    progress_callback=_on_page_progress,
                 )
 
                 if rec.status == "canceled":
@@ -1677,13 +1719,28 @@ async def _run_job(
                         lq_bytes = _json_utf8_bytes(lq)
                         lq_sha = hashlib.sha256(lq_bytes).hexdigest()
                         file_store.store_blob(lq_bytes, sha256hex=lq_sha)
-                        lq_fid = file_store.create_file_for_output(
-                            f"{fr.name}.layout_quality.json", lq_bytes, sha256hex=lq_sha
-                        )
+                        lq_fid = file_store.create_file_for_output(f"{fr.name}.layout_quality.json", lq_bytes, sha256hex=lq_sha)
                         output_files.layout_quality = OutputFileRef(file_id=lq_fid, bytes=len(lq_bytes))
                     except Exception:
                         logger.warning(
                             "Layout quality scoring failed for job_id=%s file=%r; parse output is unaffected",
+                            rec.id,
+                            fr.name,
+                            exc_info=True,
+                        )
+
+                # layout_pdf (fork 扩展): 在原始完整 PDF 上绘制版面框，仅 PDF 输入。
+                # 绘制失败不影响解析产物, 仅记录告警 (与 layout_quality 一致)。
+                if "layout_pdf" in out_formats and suffix.lstrip(".").lower() == "pdf":
+                    try:
+                        lp_bytes = await run_sync(_render_layout_pdf_bytes, data, result, page_range)
+                        lp_sha = hashlib.sha256(lp_bytes).hexdigest()
+                        file_store.store_blob(lp_bytes, sha256hex=lp_sha)
+                        lp_fid = file_store.create_file_for_output(f"{fr.name}.layout.pdf", lp_bytes, sha256hex=lp_sha)
+                        output_files.layout_pdf = OutputFileRef(file_id=lp_fid, bytes=len(lp_bytes))
+                    except Exception:
+                        logger.warning(
+                            "Layout PDF rendering failed for job_id=%s file=%r; parse output is unaffected",
                             rec.id,
                             fr.name,
                             exc_info=True,
@@ -1700,6 +1757,7 @@ async def _run_job(
                 fr.status = "completed"
                 fr.page_range = _page_range_from_result_pages(result.pages)
                 fr.output_files = output_files
+                fr.progress = None
 
                 fr.parse = FileParseInfo(
                     model_used=None,
@@ -1721,6 +1779,7 @@ async def _run_job(
                     fr.page_range,
                 )
                 fr.status = "failed"
+                fr.progress = None
                 if isinstance(exc, MineruError):
                     fr.error = ErrorDetail(type=exc.type, code=exc.code, message=str(exc), param=exc.param)
                 else:

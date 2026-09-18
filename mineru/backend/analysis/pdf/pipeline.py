@@ -17,7 +17,7 @@ from ....model.vlm.contracts import VlmPredictor
 from ....model.runtime.hybrid import HybridLocalModelContext, HybridLocalModelContextSingleton
 from ....model.runtime.memory import clean_memory, trim_process_heap
 from ....model.vlm.client import get_vlm_predictor
-from ..contracts import AnalysisResult, AnalyzeEffort, ParseMode, ResolvedParseMode
+from ..contracts import AnalysisResult, AnalyzeEffort, PageProgressCallback, ParseMode, ResolvedParseMode
 from .normalization import _normalize_pdf_model_list
 from .window import aio_process_pdf_windows, process_pdf_windows
 
@@ -81,6 +81,7 @@ def analyze_pdf(
     parse_mode: ParseMode = "auto",
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> AnalysisResult:
     """使用共享资源生命周期与同步窗口编排生产 PDF 模型结果。"""
     state = _PDFAnalysis()
@@ -96,6 +97,7 @@ def analyze_pdf(
             flash_txt_mode=state.flash_txt_mode,
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
+            progress_callback=progress_callback,
         )
         result = _build_pdf_analysis_result(state, model_list, effort, infer_started_at)
     finally:
@@ -109,6 +111,7 @@ async def aio_analyze_pdf(
     parse_mode: ParseMode = "auto",
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> AnalysisResult:
     """原生异步调度 VLM；同步准备、回填与清理使用取消安全的线程边界。"""
     state = _PDFAnalysis()
@@ -125,6 +128,7 @@ async def aio_analyze_pdf(
             image_analysis=image_analysis,
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
+            progress_callback=progress_callback,
         )
         result = await run_sync(_build_pdf_analysis_result, state, model_list, effort, infer_started_at)
     finally:

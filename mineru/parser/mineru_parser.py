@@ -12,6 +12,7 @@ from typing import Any, Literal, cast
 from docvortex.document.contracts import HtmlSourceContext
 from docvortex.schema import DocumentProperties
 
+from ..backend.analysis.contracts import PageProgressCallback
 from ..backend.analyze import aio_doc_analyze, doc_analyze
 from ..config import VlmConfig, config
 from ..errors import InvalidRequestError
@@ -69,14 +70,18 @@ class MinerUParser(DocumentParser):
         *,
         page_range: str = "",
         source_context: HtmlSourceContext | None = None,
+        progress_callback: PageProgressCallback | None = None,
     ) -> ParseResult:
-        """解析本地路径，并允许内部调用方覆盖 HTML 原始来源上下文。"""
+        """解析本地路径，并允许内部调用方覆盖 HTML 原始来源上下文。
+
+        fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件。
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
 
         prepared = self._prepare_input(path, page_range, source_context)
-        middle_json, model_output = self._run_analysis(prepared)
+        middle_json, model_output = self._run_analysis(prepared, progress_callback=progress_callback)
         if prepared.file_suffix == "pdf":
             self._insert_broken_pages(
                 middle_json.pages,
@@ -91,14 +96,18 @@ class MinerUParser(DocumentParser):
         *,
         page_range: str = "",
         source_context: HtmlSourceContext | None = None,
+        progress_callback: PageProgressCallback | None = None,
     ) -> ParseResult:
-        """异步解析本地路径，并保留 HTML 下载来源或本地资源根。"""
+        """异步解析本地路径，并保留 HTML 下载来源或本地资源根。
+
+        fork 扩展：``progress_callback`` 仅 PDF 输入生效，报告页级进度事件。
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
 
         prepared = await run_sync(self._prepare_input, path, page_range, source_context)
-        middle_json, model_output = await self._arun_analysis(prepared)
+        middle_json, model_output = await self._arun_analysis(prepared, progress_callback=progress_callback)
         if prepared.file_suffix == "pdf":
             self._insert_broken_pages(
                 middle_json.pages,
@@ -107,7 +116,9 @@ class MinerUParser(DocumentParser):
             )
         return self._build_result(middle_json, model_output)
 
-    def _run_analysis(self, prepared: _PreparedInput) -> tuple[MiddleJson, ModelJson]:
+    def _run_analysis(
+        self, prepared: _PreparedInput, *, progress_callback: PageProgressCallback | None = None
+    ) -> tuple[MiddleJson, ModelJson]:
         """将准备后的输入和实例连接配置传入同步分析入口。"""
         return doc_analyze(
             prepared.file_bytes,
@@ -119,9 +130,12 @@ class MinerUParser(DocumentParser):
             source_context=prepared.source_context,
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
+            progress_callback=progress_callback,
         )
 
-    async def _arun_analysis(self, prepared: _PreparedInput) -> tuple[MiddleJson, ModelJson]:
+    async def _arun_analysis(
+        self, prepared: _PreparedInput, *, progress_callback: PageProgressCallback | None = None
+    ) -> tuple[MiddleJson, ModelJson]:
         """将准备后的输入和实例连接配置传入异步分析入口。"""
         return await aio_doc_analyze(
             prepared.file_bytes,
@@ -133,6 +147,7 @@ class MinerUParser(DocumentParser):
             source_context=prepared.source_context,
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
+            progress_callback=progress_callback,
         )
 
     def _prepare_input(

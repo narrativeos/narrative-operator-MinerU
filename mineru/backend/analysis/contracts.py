@@ -4,13 +4,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Any, Callable, Literal, TypeAlias
 
 AnalyzeEffort: TypeAlias = Literal["flash", "medium", "high", "xhigh"]
 # 请求阶段允许自动分类，分析结果中的模式必须已经收敛为 txt 或 ocr。
 ParseMode: TypeAlias = Literal["auto", "txt", "ocr"]
 ResolvedParseMode: TypeAlias = Literal["txt", "ocr"]
 OfficeSuffix: TypeAlias = Literal["doc", "docx", "ppt", "pptx", "xls", "xlsx", "rtf", "odt", "ods", "odp"]
+# fork 扩展：PDF 页级进度阶段。prepare=窗口渲染准备，inference=VLM/OCR 推理，
+# postprocess=窗口内回填，done=全部页面完成（current_page == total_pages）。
+PageProgressStage: TypeAlias = Literal["prepare", "inference", "postprocess", "done"]
+# fork 扩展：页级进度回调 (current_page, total_pages, stage)。
+# current_page 为 0 基的下一个待处理页索引，done 时等于 total_pages。
+PageProgressCallback: TypeAlias = Callable[[int, int, PageProgressStage], None]
 
 
 @dataclass(slots=True)

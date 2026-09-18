@@ -21,7 +21,7 @@ from ....model.runtime.execution import local_model_stage
 from ....utils.async_utils import run_sync
 from ....model.runtime.hybrid import HybridLocalModelContext
 from ....model.runtime.memory import trim_process_heap
-from ..contracts import AnalyzeEffort
+from ..contracts import AnalyzeEffort, PageProgressCallback, PageProgressStage
 from .constants import (
     BATCH_RATIO,
     LAYOUT_BASE_BATCH_SIZE,
@@ -128,6 +128,18 @@ def _log_processing_window(window: _ProcessingWindow, page_count: int, image_cou
         f"pages {window.start + 1}-{window.end + 1}/{page_count} "
         f"({image_count} pages)"
     )
+
+
+def _emit_progress(
+    callback: PageProgressCallback | None, current_page: int, total_pages: int, stage: PageProgressStage
+) -> None:
+    """fork 扩展：发出页级进度事件；回调异常只告警，不中断解析。"""
+    if callback is None:
+        return
+    try:
+        callback(current_page, total_pages, stage)
+    except Exception:
+        logger.warning("PDF progress callback failed at page %d/%d stage=%s", current_page, total_pages, stage, exc_info=True)
 
 
 def _close_images(images_list: list[dict[str, Any]]) -> None:
@@ -528,10 +540,12 @@ def _process_pdf_window(
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> list[list[dict[str, Any]]]:
     """同步编排共享窗口阶段，在 VLM 等待期间释放本地模型执行锁。"""
     if hybrid_model is None:
         raise ValueError("Hybrid local model context is required outside Flash TXT mode")
+    _emit_progress(progress_callback, window.start, page_count, "prepare")
     with local_model_stage(hybrid_model.device):
         state = _prepare_pdf_window(
             file_bytes,
@@ -547,11 +561,13 @@ def _process_pdf_window(
         if effort in {"high", "xhigh"}:
             if vlm_predictor is None:
                 raise ValueError("VLM predictor is required for high/xhigh")
+            _emit_progress(progress_callback, window.start, page_count, "inference")
             options = _inference_options(state, effort, parse_mode, image_analysis)
             if effort == "high":
                 result = vlm_predictor.batch_extract_with_layout(**options)
             else:
                 result = vlm_predictor.batch_two_step_extract(**options)
+        _emit_progress(progress_callback, window.start, page_count, "postprocess")
         with local_model_stage(hybrid_model.device):
             return _finish_pdf_window(state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model)
     finally:
@@ -603,6 +619,7 @@ async def aio_process_pdf_windows(
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext,
     vlm_predictor: VlmPredictor,
+    progress_callback: PageProgressCallback | None = None,
 ) -> list[list[dict[str, Any]]]:
     """逐窗口原生异步推理；仅不同文档可交错推进，保留单文档内存上界。"""
     page_count = document.page_count
@@ -630,15 +647,18 @@ async def aio_process_pdf_windows(
                     )
                 )
 
+            _emit_progress(progress_callback, window.start, page_count, "prepare")
             try:
                 await run_sync(prepare)
             finally:
                 state = holder[0] if holder else None
+            _emit_progress(progress_callback, window.start, page_count, "inference")
             options = _inference_options(state, effort, parse_mode, image_analysis)
             if effort == "high":
                 result = await vlm_predictor.aio_batch_extract_with_layout(**options)
             else:
                 result = await vlm_predictor.aio_batch_two_step_extract(**options)
+            _emit_progress(progress_callback, window.start, page_count, "postprocess")
             model_list.extend(
                 await run_sync(
                     _finish_locked_window,
@@ -653,6 +673,7 @@ async def aio_process_pdf_windows(
             if state is not None:
                 await run_sync(state.close)
             await run_sync(trim_process_heap)
+    _emit_progress(progress_callback, page_count, page_count, "done")
     return model_list
 
 
@@ -666,6 +687,7 @@ def process_pdf_windows(
     flash_txt_mode: bool,
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
+    progress_callback: PageProgressCallback | None = None,
 ) -> list[list[dict[str, Any]]]:
     """按固定阶段处理全部 PDF 窗口并返回完整 model-list。"""
     page_count = document.page_count
@@ -674,6 +696,7 @@ def process_pdf_windows(
         # Flash 原生结果只按视觉块需求补图，不再进入供推理使用的全页渲染窗口。
         from docvortex.analyzers.native import PdfModel
 
+        _emit_progress(progress_callback, 0, page_count, "inference")
         model_list = PdfModel().predict(document)
         attach_visual_block_images_from_pdf(
             document,
@@ -682,6 +705,7 @@ def process_pdf_windows(
             timeout=get_load_images_timeout(),
             threads=get_load_images_threads(),
         )
+        _emit_progress(progress_callback, page_count, page_count, "done")
         return model_list
 
     configured_window_size = _configured_window_size(default=64)
@@ -701,12 +725,14 @@ def process_pdf_windows(
                     image_analysis=image_analysis,
                     hybrid_model=hybrid_model,
                     vlm_predictor=vlm_predictor,
+                    progress_callback=progress_callback,
                 )
             )
         finally:
             # 单窗口作用域退出后再回收，避免上一窗口临时数组与下一窗口渲染重叠。
             trim_process_heap()
 
+    _emit_progress(progress_callback, page_count, page_count, "done")
     return model_list
 
 
