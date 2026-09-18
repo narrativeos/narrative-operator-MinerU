@@ -17,10 +17,11 @@ source .venv/bin/activate
 uv pip install -e ".[all]"
 ```
 
-可选（国内模型源）：
+模型源：脚本默认使用 ModelScope（国内镜像）。如需改用其他源，在运行脚本前
+预先设置 `MINERU_MODEL_SOURCE`（可选值：`auto` / `huggingface` / `modelscope` / `local`）：
 
 ```bash
-export MINERU_MODEL_SOURCE=modelscope
+export MINERU_MODEL_SOURCE=huggingface   # 例如改用 Hugging Face
 ```
 
 ## 2. 一键启动脚本

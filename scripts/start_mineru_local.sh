@@ -168,8 +168,13 @@ raise SystemExit(0 if Version('0.7.0') <= v < Version('0.8.0') else 1)
 
 detect_and_install_vlm_engine
 
-# Optional: use domestic model source by default.
-export MINERU_MODEL_SOURCE="modelscope"
+# Model source: default to ModelScope (faster in mainland China). Override by
+# pre-setting MINERU_MODEL_SOURCE before running this script:
+#   auto        - probe Hugging Face, fall back to ModelScope (MinerU core default)
+#   huggingface - Hugging Face
+#   modelscope  - ModelScope (mainland China mirror; this script's default)
+#   local       - offline, use already-downloaded models only
+export MINERU_MODEL_SOURCE="${MINERU_MODEL_SOURCE:-modelscope}"
 
 # Tunables for local startup
 GPU_MEMORY_UTILIZATION="${MINERU_GPU_MEMORY_UTILIZATION:-0.4}"
