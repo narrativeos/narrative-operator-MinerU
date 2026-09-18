@@ -116,3 +116,32 @@ bash scripts/start_mineru_local.sh gradio
 ## 6. 说明
 
 脚本内部使用 `mineru-kit` 子命令（`webui` / `api-server` / `vlm-server`）启动，因此要求项目已安装到当前环境（脚本会自动检测并安装缺失依赖）。
+
+## 7. 模型更新时刷新
+
+当上游模型（如 `MinerU2.5-Pro-2605-1.2B`）更新后，本地缓存**不会自动重新下载**：
+`vlm-server` 启动时若检测到 `.mineru_complete` 标记会跳过下载。此外，MLX 引擎首次
+加载会把模型**就地转换**，留下冗余的 `model.safetensors.orig` 备份。因此刷新模型时
+建议先删除整个模型目录再重新下载，避免旧的转换产物干扰。
+
+已提供脚本：`scripts/refresh_vlm_model.sh`
+
+```bash
+# 预览将执行的操作（不改任何东西）
+bash scripts/refresh_vlm_model.sh --dry-run
+
+# 刷新默认 VLM：停 VLM server → 删模型目录（含 .orig）→ 重新下载
+bash scripts/refresh_vlm_model.sh
+
+# 刷新后前台重启 VLM server
+bash scripts/refresh_vlm_model.sh --restart
+
+# 刷新其他仓库（如小模型）
+bash scripts/refresh_vlm_model.sh MinerU-4_models_torch
+```
+
+说明：
+
+- 模型源沿用 `MINERU_MODEL_SOURCE`（默认 `modelscope`），与启动脚本一致。
+- 脚本通过 registry 解析模型目录，不硬编码路径；`--no-stop` 可跳过停止 VLM server。
+- 刷新完成后，MLX 的 config 补丁会在下次 `vlm-server` 启动时自动重新应用。
