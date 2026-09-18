@@ -1,10 +1,18 @@
-# block_id 溯源字段说明（下游应用指南）
+# block_id 溯源与页面类型标注说明（下游应用指南）
 
-**版本**: v1.1
+**版本**: v1.2
 **日期**: 2026-09-18
 **适用 MinerU**: 4.0.1（fork）
-**影响范围**: model_output.json, middle_json.json, content_list.json, content_list_v2.json
+**影响范围**: model_output.json, middle_json.json, content_list.json, content_list_v2.json, markdown（FULL 模式）
 
+> **v1.2 变更**：
+> 1. 新增 [六、页面类型（page_type）标注](#六页面类型page_type标注) 章节，说明 4.0 下
+>    页面类型在各输出中的位置；
+> 2. **markdown FULL 模式恢复 `<!-- page_type: ... -->` 注释**：
+>    `ParseResult.markdown(add_markers=True)`（或 `RenderMode.FULL`）输出在每页内容前
+>    插入注释，与 3.x markdown 输出兼容。DEFAULT 模式（默认 `markdown.md`）
+>    无可靠页边界，仍不插入注释。
+>
 > **v1.1 变更**：身份串调整为 **页码 + bbox + 内容摘要**。
 > 1. **加入 bbox**：block 的页面位置参与身份，同页同内容但位置不同的 block 必然不同 id；
 > 2. **移除块序号（`index`）与类型（`type`）**：前序 block 增删导致的序号位移
@@ -163,9 +171,9 @@ block 类型重分类（如 `text` → `paragraph_title`）均**不改变**已�
 
 ### 3.4 structured_content.json / markdown
 
-**不包含** `block_id`（structured_content 不输出 extensions，
-markdown 仅有 `page_type` 注释）。需要溯源时请使用
-`middle_json.json` 的 `extensions.mineru_block_ids` 反查。
+**不包含** `block_id`（structured_content 不输出 extensions）。
+需要溯源时请使用 `middle_json.json` 的 `extensions.mineru_block_ids` 反查。
+markdown 中的页面类型注释见 [六、页面类型标注](#六页面类型page_type标注)。
 
 ---
 
@@ -231,6 +239,61 @@ A: 能读，但 id 与新算法不互通，无法用于跨版本 diff。建议�
 
 ---
 
-## 六、联系信息
+## 六、页面类型（page_type）标注
+
+fork 扩展的页面类型分类（v2.2 分类器，含国标/行标优化）在 4.0 下完整保留，
+仅 PDF 解析路径生效。类型枚举值及判定规则详见
+[`docs/page_type_change.md`](./page_type_change.md)，本节只说明 4.0 下
+**标注出现在哪里、怎么读**。
+
+### 6.1 字段
+
+| 字段 | 说明 |
+|------|------|
+| `page_type` | 页面主类型（`cover` / `toc` / `body` / `chapter_start` 等，枚举见 page_type_change.md） |
+| `page_type_secondary` | 次要类型（可选，仅混合页出现，如目录+版权页） |
+
+### 6.2 各输出格式中的体现
+
+| 输出 | 位置 | 说明 |
+|------|------|------|
+| `middle_json.json` | 顶层 `extensions.mineru_page_types` | 结构 `{str(page_idx): {"page_type": ..., "page_type_secondary": ...}}`，按页反查 |
+| `content_list.json` / `content_list_v2.json` | 每个条目的 `page_type` / `page_type_secondary` 字段 | 最直接，随条目携带 |
+| markdown（**FULL 模式**） | 每页内容前的 HTML 注释 | `<!-- page_type: toc -->` 或 `<!-- page_type: toc; page_type_secondary: copyright -->` |
+| markdown（DEFAULT 模式，默认 `markdown.md`） | **无** | DEFAULT 模式页间无分隔符、空页被丢弃，无可靠页边界，不注入注释 |
+| `model_output.json` / `structured_content.json` | **无** | — |
+
+### 6.3 markdown 注释的获取方式
+
+3.x 的默认 markdown 输出带有 `<!-- page_type: ... -->` 注释；4.0 下需要显式
+使用 FULL 模式（页间以 `---` 分隔）才能恢复：
+
+```python
+# SDK：add_markers=True 即 RenderMode.FULL
+markdown = result.markdown(add_markers=True)
+```
+
+```markdown
+<!-- page_type: cover -->
+# 书名
+
+---
+
+<!-- page_type: toc; page_type_secondary: copyright -->
+## 目录
+...
+```
+
+- 无标注的页不插入注释；
+- 若正文本身含 `---` 分页符导致页边界无法可靠定位，则整体放弃注入
+  （宁缺勿错），此时请改用 content_list / middle_json 读取页面类型。
+
+**下游建议**：程序化消费页面类型请优先使用 content_list 条目字段或
+`middle_json.json` 的 `extensions.mineru_page_types`，markdown 注释仅作为
+与 3.x 兼容的文本层视图。
+
+---
+
+## 七、联系信息
 
 如有问题，请联系 MinerU 开发团队。
