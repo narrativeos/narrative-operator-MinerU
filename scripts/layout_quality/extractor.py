@@ -32,14 +32,39 @@ from .indicators import N_IND
 from .aggregator import BookAggregator, page_gravity
 
 # middle.json 块类型 <- 可匹配的 model.json 原始类型
+# (4.0 的 model/middle 共用同一套 BlockType 字符串, chart 归入 image 兼容集)
 MODEL_TO_MIDDLE_TYPES = {
     'title': {'doc_title', 'paragraph_title', 'title'},
     'text': {'text', 'ocr_text'},
     'table': {'table'},
-    'image': {'image'},
+    'image': {'image', 'chart'},
     'interline_equation': {'equation', 'inline_formula'},
     'ref_text': {'ref_text'},
 }
+
+# 4.0 块类型 (BlockType 字符串) -> 3.x middle 块类型
+_40_TO_LEGACY_TYPE = {
+    'text': 'text',
+    'doc_title': 'title',
+    'paragraph_title': 'title',
+    'title': 'title',
+    'table': 'table',
+    'image': 'image',
+    'chart': 'image',
+    'equation': 'interline_equation',
+    'ref_text': 'ref_text',
+    'list': 'text',
+    'index': 'text',
+    'code': 'text',
+    'header': 'text',
+    'footer': 'text',
+    'page_number': 'text',
+    'aside_text': 'text',
+    'page_footnote': 'text',
+}
+
+# docvortex_layout 扩展缺失时的兜底页尺寸 (A4, pt)
+_DEFAULT_PAGE_SIZE = (595.0, 842.0)
 
 # 正文类块 (参与空间/分区类指标)
 BODY_TYPES = ('text', 'title', 'table', 'interline_equation', 'ref_text')
@@ -440,14 +465,21 @@ def _find_file(directory, suffix):
 
 
 def load_book_from_hybrid_dir(hybrid_dir, book_name=None):
-    """从 MinerU hybrid_auto 输出目录加载单本书的逐页数据。
+    """从 MinerU 输出目录加载单本书的逐页数据 (自动识别 3.x / 4.0 格式)。
     返回 BookAggregator (未去噪, 由 pipeline 统一处理)。
-    书名默认取 hybrid_auto 的父目录名 (即解析任务名)。"""
+    书名默认取输出目录的父目录名 (即解析任务名)。
+
+    3.x 目录含 ``*_model.json`` + ``*_middle.json`` (pdf_info/para_blocks, 绝对 bbox);
+    4.0 目录含 ``model_output.json`` + ``middle_json.json`` (归一化 bbox, 页尺寸在
+    docvortex_layout 扩展)。两者都缺失时抛 FileNotFoundError。"""
+    if _is_40_dir(hybrid_dir):
+        return load_book_from_40_dir(hybrid_dir, book_name=book_name)
     model_path = _find_file(hybrid_dir, '_model.json')
     middle_path = _find_file(hybrid_dir, '_middle.json')
     if model_path is None or middle_path is None:
         raise FileNotFoundError(
-            f'{hybrid_dir} 下未找到 *_model.json / *_middle.json, 不是有效的 MinerU 输出目录')
+            f'{hybrid_dir} 下未找到 *_model.json / *_middle.json 或 '
+            f'model_output.json / middle_json.json, 不是有效的 MinerU 输出目录')
     with open(model_path, encoding='utf-8') as f:
         model = json.load(f)
     with open(middle_path, encoding='utf-8') as f:
@@ -464,4 +496,208 @@ def load_book_from_hybrid_dir(hybrid_dir, book_name=None):
                      coverage=r['coverage'], text_blocks=r['text_blocks'],
                      center=r['center'], page_width=r['page_width'])
     return agg
+
+
+# ============================================================
+# 4.0 格式适配 (ModelJson + MiddleJson, 归一化 bbox)
+# ============================================================
+def _is_40_dir(directory):
+    """判断目录是否为 4.0 输出 (含 model_output.json 与 middle_json.json)。"""
+    return (
+        os.path.isfile(os.path.join(directory, 'model_output.json'))
+        and os.path.isfile(os.path.join(directory, 'middle_json.json'))
+    )
+
+
+def _span_text(span):
+    """从 4.0 InlineSpan (dict) 提取纯文本 (兼容嵌套 hyperlink 子节点)。"""
+    if not isinstance(span, dict):
+        return ''
+    content = span.get('content', '')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return ''.join(_span_text(c) for c in content)
+    return ''
+
+
+def _page_size_from_layout(model_dict, page_idx, fallback=_DEFAULT_PAGE_SIZE):
+    """从 4.0 ModelJson 的 docvortex_layout 扩展读取页尺寸 (pt), 缺失时兜底。"""
+    layout = (model_dict.get('extensions') or {}).get('docvortex_layout') or {}
+    for p in layout.get('pages') or []:
+        if p.get('page_idx') == page_idx:
+            w, h = p.get('width_pt'), p.get('height_pt')
+            if w and h and w > 0 and h > 0:
+                return (float(w), float(h))
+    return fallback
+
+
+def _match_model_lines(middle_block, model_page, page_w, page_h):
+    """从 model_page 中找到与 middle_block 最佳匹配的 model block 的行级 bbox。
+
+    匹配条件: 类型兼容 (MODEL_TO_MIDDLE_TYPES) + IoU 最大 (阈值 0.3)。
+    返回行级 bbox 列表 (绝对坐标, 每行 [x1,y1,x2,y2]) 或 None。
+    """
+    btype = _40_TO_LEGACY_TYPE.get(middle_block.get('type'))
+    if btype not in TEXT_TYPES:
+        return None
+    mbbox = middle_block.get('bbox')
+    if mbbox is None:
+        return None
+    # 找到与该 middle 类型兼容的 model 类型集合
+    compatible_types = set()
+    for mid_type, model_types in MODEL_TO_MIDDLE_TYPES.items():
+        if mid_type == btype:
+            compatible_types = model_types
+            break
+    if not compatible_types:
+        return None
+    best_iou = 0.0
+    best_lines = None
+    for mb in model_page:
+        mtype = mb.get('type')
+        if mtype not in compatible_types:
+            continue
+        mbbox_m = mb.get('bbox')
+        if mbbox_m is None:
+            continue
+        iou = _iou(mbbox, mbbox_m)
+        if iou > best_iou:
+            best_iou = iou
+            lines = mb.get('lines')
+            if lines:
+                best_lines = lines
+    if best_iou >= 0.3 and best_lines:
+        # 将归一化 bbox (0-1) 转换为绝对坐标 (pt)
+        abs_lines = []
+        for lb in best_lines:
+            lbbox = lb.get('bbox') if isinstance(lb, dict) else lb
+            if isinstance(lbbox, (list, tuple)) and len(lbbox) == 4:
+                abs_lines.append([
+                    lbbox[0] * page_w, lbbox[1] * page_h,
+                    lbbox[2] * page_w, lbbox[3] * page_h,
+                ])
+        return abs_lines if abs_lines else None
+    return None
+
+
+def _build_lines_from_line_bboxes(line_bboxes, spans, abs_bbox):
+    """从行级 bbox 列表创建 line/span 结构 (供 C9 行结构指标)。
+
+    每行一个 span, span bbox 与行 bbox 相同 (C9 只使用 bbox 几何, 不使用 content)。
+    若 line_bboxes 为空则回退到块级单行合成。
+    """
+    if not line_bboxes:
+        return [{'bbox': abs_bbox, 'spans': spans}] if spans else []
+    lines = []
+    for lbbox in line_bboxes:
+        line_spans = [{'bbox': lbbox, 'type': 'text', 'content': '', 'score': 1.0}]
+        lines.append({'bbox': lbbox, 'spans': line_spans})
+    return lines
+
+
+
+def _middle_block_to_legacy(block, page_w, page_h, line_bboxes=None):
+    """把 4.0 middle block (dict, 归一化 bbox) 转成 3.x para_block (绝对 bbox)。
+
+    文本类块: content (InlineSpan 列表) 展平为 spans (score=1.0, 无 OCR 置信度);
+    表格块: 补 table_body 子块; 其余块: lines=[]。
+    line_bboxes: 可选的行级 bbox 列表 (绝对坐标), 用于 C9 行结构指标;
+                 提供时按行拆分 lines/spans, 否则回退到块级单行合成。"""
+    if not isinstance(block, dict):
+        return None
+    btype = _40_TO_LEGACY_TYPE.get(block.get('type'))
+    bbox = block.get('bbox')
+    if btype is None or bbox is None:
+        return None
+    abs_bbox = [bbox[0] * page_w, bbox[1] * page_h, bbox[2] * page_w, bbox[3] * page_h]
+    legacy = {
+        'bbox': abs_bbox,
+        'type': btype,
+        'angle': 0,
+        'index': block.get('index', 0) or 0,
+    }
+    if btype in TEXT_TYPES:
+        spans = []
+        for sp in block.get('content', []) or []:
+            text = _span_text(sp)
+            if not text:
+                continue
+            spans.append({'bbox': abs_bbox, 'type': 'text', 'content': text, 'score': 1.0})
+        if line_bboxes:
+            legacy['lines'] = _build_lines_from_line_bboxes(line_bboxes, spans, abs_bbox)
+        else:
+            legacy['lines'] = [{'bbox': abs_bbox, 'spans': spans}] if spans else []
+    else:
+        legacy['lines'] = []
+    if btype == 'table':
+        legacy['blocks'] = [{'type': 'table_body', 'bbox': abs_bbox}]
+    return legacy
+
+
+def _build_agg_from_40(model_dict, middle_dict, book_name):
+    """从 4.0 ModelJson + MiddleJson (dict) 构建 BookAggregator。"""
+    agg = BookAggregator(book_name)
+    model_pages = model_dict.get('pages') or []
+    for i, mpage in enumerate(middle_dict.get('pages') or []):
+        page_idx = mpage.get('page_idx', i)
+        page_w, page_h = _page_size_from_layout(model_dict, page_idx)
+        model_page = model_pages[i] if i < len(model_pages) else []
+        para_blocks = []
+        for b in mpage.get('blocks') or []:
+            line_bboxes = _match_model_lines(b, model_page, page_w, page_h)
+            legacy = _middle_block_to_legacy(b, page_w, page_h, line_bboxes=line_bboxes)
+            if legacy is not None:
+                para_blocks.append(legacy)
+        middle_page = {
+            'page_size': [page_w, page_h],
+            'page_idx': page_idx,
+            'preproc_blocks': [],
+            'discarded_blocks': [],
+            'para_blocks': para_blocks,
+        }
+        r = extract_page_metrics(model_page, middle_page)
+        agg.add_page(
+            page_idx + 1, r['metrics'],
+            coverage=r['coverage'], text_blocks=r['text_blocks'],
+            center=r['center'], page_width=r['page_width'],
+        )
+    return agg
+
+
+def load_book_from_40_dir(hybrid_dir, book_name=None):
+    """从 4.0 MinerU 输出目录 (model_output.json + middle_json.json) 加载单本书。
+
+    Raises:
+        FileNotFoundError: model_output/middle_json 缺失。
+    """
+    model_path = os.path.join(hybrid_dir, 'model_output.json')
+    middle_path = os.path.join(hybrid_dir, 'middle_json.json')
+    if not (os.path.isfile(model_path) and os.path.isfile(middle_path)):
+        raise FileNotFoundError(
+            f'{hybrid_dir} 下未找到 model_output.json / middle_json.json, '
+            f'不是有效的 4.0 输出目录')
+    with open(model_path, encoding='utf-8') as f:
+        model = json.load(f)
+    with open(middle_path, encoding='utf-8') as f:
+        middle = json.load(f)
+    if book_name is None:
+        book_name = os.path.basename(os.path.dirname(os.path.abspath(hybrid_dir)))
+    return _build_agg_from_40(model, middle, book_name)
+
+
+def load_book_from_parse_result(result, book_name=None):
+    """从内存中的 4.0 ParseResult 构建 BookAggregator (供 V1 API 评分使用)。
+
+    直接读取 middle_json 与 model_output, 无需落盘。缺少 model_output 时
+    匹配类指标 (C1/C4/C5/C6/C8) 退化为无原始检测框, 其余指标仍可计算。"""
+    middle_dict = result.to_dict(skip_defaults=True)
+    model_output = getattr(result, '_model_output', None)
+    model_dict = (
+        model_output.to_dict(skip_defaults=False) if model_output is not None
+        else {'pages': []}
+    )
+    if book_name is None:
+        book_name = 'parse_result'
+    return _build_agg_from_40(model_dict, middle_dict, book_name)
 

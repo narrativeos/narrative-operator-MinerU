@@ -20,6 +20,7 @@ from scripts.layout_quality.ahp import (  # noqa: E402
 )
 from scripts.layout_quality.demo import run_demo  # noqa: E402
 from scripts.layout_quality.entropy import entropy_weight  # noqa: E402
+from scripts.layout_quality import extractor, service  # noqa: E402
 from scripts.layout_quality.extractor import (  # noqa: E402
     extract_page_metrics,
     load_book_from_hybrid_dir,
@@ -374,6 +375,310 @@ class TestExtractor(unittest.TestCase):
         fp = np.mean([p['metrics'] for p in agg.pages], axis=0)
         self.assertGreater(fp[3], 0.8)   # C4 mIoU
         self.assertGreater(fp[11], 0.8)  # C12 语义纯度
+
+
+class TestLayoutQuality40Format(unittest.TestCase):
+    """4.0 输出格式 (model_output.json + middle_json.json, 归一化 bbox) 适配。"""
+
+    PAGE_W, PAGE_H = 595.0, 842.0
+
+    def _make_40_dir(self, root):
+        backend = os.path.join(root, 'demo3', 'out')
+        os.makedirs(backend)
+        w, h = self.PAGE_W, self.PAGE_H
+        middle = {
+            'schema': 'docvortex.middle', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {}, 'is_full_document': True,
+            'pages': [{
+                'page_idx': 0,
+                'blocks': [
+                    {'type': 'text', 'index': 1,
+                     'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                     'content': [{'type': 'text', 'content': 'hello world'}]},
+                    {'type': 'text', 'index': 2,
+                     'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+                     'content': [{'type': 'text', 'content': 'second para'}]},
+                    {'type': 'text', 'index': 3,
+                     'bbox': [80 / w, 300 / h, 515 / w, 360 / h],
+                     'content': [{'type': 'text', 'content': 'third para'}]},
+                    {'type': 'table', 'index': 4,
+                     'bbox': [50 / w, 400 / h, 545 / w, 700 / h], 'content': []},
+                ],
+            }],
+        }
+        model = {
+            'schema': 'docvortex.model', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {'docvortex_layout': {'version': 1, 'pages': [
+                {'page_idx': 0, 'width_pt': w, 'height_pt': h}]}},
+            'pages': [[
+                {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h]},
+                {'type': 'text', 'bbox': [80 / w, 200 / h, 515 / w, 260 / h]},
+                {'type': 'text', 'bbox': [80 / w, 300 / h, 515 / w, 360 / h]},
+                {'type': 'table', 'bbox': [50 / w, 400 / h, 545 / w, 700 / h]},
+            ]],
+            'page_index_map': [],
+        }
+        with open(os.path.join(backend, 'middle_json.json'), 'w', encoding='utf-8') as f:
+            json.dump(middle, f)
+        with open(os.path.join(backend, 'model_output.json'), 'w', encoding='utf-8') as f:
+            json.dump(model, f)
+        return backend
+
+    def test_page_size_from_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self._make_40_dir(tmp)
+            with open(os.path.join(backend, 'model_output.json'), encoding='utf-8') as f:
+                model = json.load(f)
+            self.assertEqual(
+                extractor._page_size_from_layout(model, 0), (self.PAGE_W, self.PAGE_H))
+            self.assertEqual(
+                extractor._page_size_from_layout({}, 0),
+                extractor._DEFAULT_PAGE_SIZE)
+
+    def test_block_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self._make_40_dir(tmp)
+            with open(os.path.join(backend, 'middle_json.json'), encoding='utf-8') as f:
+                middle = json.load(f)
+            w, h = self.PAGE_W, self.PAGE_H
+            text = extractor._middle_block_to_legacy(middle['pages'][0]['blocks'][0], w, h)
+            self.assertEqual(text['type'], 'text')
+            self.assertAlmostEqual(text['bbox'][0], 80.0)
+            self.assertEqual(text['lines'][0]['spans'][0]['content'], 'hello world')
+            table = extractor._middle_block_to_legacy(middle['pages'][0]['blocks'][3], w, h)
+            self.assertEqual(table['type'], 'table')
+            self.assertEqual(table['blocks'][0]['type'], 'table_body')
+            self.assertIsNone(extractor._middle_block_to_legacy(
+                {'type': 'unknown', 'bbox': [0, 0, 1, 1]}, w, h))
+
+    def test_load_40_dir_auto_detect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self._make_40_dir(tmp)
+            agg = extractor.load_book_from_hybrid_dir(backend)
+            self.assertEqual(len(agg.pages), 1)
+            p = agg.pages[0]
+            self.assertEqual(p['text_blocks'], 3)
+            self.assertGreater(p['coverage'], 0.1)
+
+    def test_analyze_40_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self._make_40_dir(tmp)
+            result = service.analyze_hybrid_dir(backend)
+            self.assertEqual(result['book'], 'demo3')
+            self.assertTrue(0.0 <= result['score']['value'] <= 1.0)
+            self.assertIn('grade', result['score'])
+
+    def test_analyze_parse_result(self):
+        """内存 ParseResult 评分 (mock, 不加载模型)。"""
+        from types import SimpleNamespace
+
+        w, h = self.PAGE_W, self.PAGE_H
+        middle_dict = {
+            'schema': 'docvortex.middle', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {}, 'is_full_document': True,
+            'pages': [{
+                'page_idx': 0,
+                'blocks': [
+                    {'type': 'text', 'index': 1,
+                     'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                     'content': [{'type': 'text', 'content': 'hello world'}]},
+                    {'type': 'text', 'index': 2,
+                     'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+                     'content': [{'type': 'text', 'content': 'second para'}]},
+                    {'type': 'text', 'index': 3,
+                     'bbox': [80 / w, 300 / h, 515 / w, 360 / h],
+                     'content': [{'type': 'text', 'content': 'third para'}]},
+                ],
+            }],
+        }
+        model_dict = {
+            'schema': 'docvortex.model', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {'docvortex_layout': {'version': 1, 'pages': [
+                {'page_idx': 0, 'width_pt': w, 'height_pt': h}]}},
+            'pages': [[
+                {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h]},
+                {'type': 'text', 'bbox': [80 / w, 200 / h, 515 / w, 260 / h]},
+                {'type': 'text', 'bbox': [80 / w, 300 / h, 515 / w, 360 / h]},
+            ]],
+            'page_index_map': [],
+        }
+        result = SimpleNamespace(
+            to_dict=lambda **kw: middle_dict,
+            _model_output=SimpleNamespace(to_dict=lambda **kw: model_dict),
+        )
+        out = service.analyze_parse_result(result, book_name='mem')
+        self.assertEqual(out['book'], 'mem')
+        self.assertTrue(0.0 <= out['score']['value'] <= 1.0)
+
+    # ---- C9 行结构: lines 字段匹配与使用 ----
+
+    def _make_40_dir_with_lines(self, root):
+        """构造含 lines 字段的 4.0 目录 (3 个文本块, 每块 4 行)。"""
+        backend = os.path.join(root, 'demo3', 'out')
+        os.makedirs(backend)
+        w, h = self.PAGE_W, self.PAGE_H
+        def _lines_for_block(y0, n_lines=4, line_h=15, gap=5):
+            lines = []
+            y = y0
+            for _ in range(n_lines):
+                lines.append({'bbox': [80 / w, y / h, 515 / w, (y + line_h) / h]})
+                y += line_h + gap
+            return lines
+        middle = {
+            'schema': 'docvortex.middle', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {}, 'is_full_document': True,
+            'pages': [{
+                'page_idx': 0,
+                'blocks': [
+                    {'type': 'text', 'index': 1,
+                     'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                     'content': [{'type': 'text', 'content': 'line1 line2 line3 line4'}]},
+                    {'type': 'text', 'index': 2,
+                     'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+                     'content': [{'type': 'text', 'content': 'para2'}]},
+                    {'type': 'text', 'index': 3,
+                     'bbox': [80 / w, 300 / h, 515 / w, 360 / h],
+                     'content': [{'type': 'text', 'content': 'para3'}]},
+                ],
+            }],
+        }
+        model = {
+            'schema': 'docvortex.model', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {'docvortex_layout': {'version': 1, 'pages': [
+                {'page_idx': 0, 'width_pt': w, 'height_pt': h}]}},
+            'pages': [[
+                {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                 'lines': _lines_for_block(100)},
+                {'type': 'text', 'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+                 'lines': _lines_for_block(200)},
+                {'type': 'text', 'bbox': [80 / w, 300 / h, 515 / w, 360 / h],
+                 'lines': _lines_for_block(300)},
+            ]],
+            'page_index_map': [],
+        }
+        with open(os.path.join(backend, 'middle_json.json'), 'w', encoding='utf-8') as f:
+            json.dump(middle, f)
+        with open(os.path.join(backend, 'model_output.json'), 'w', encoding='utf-8') as f:
+            json.dump(model, f)
+        return backend
+
+    def test_match_model_lines(self):
+        """_match_model_lines: 类型兼容 + IoU 匹配, 返回绝对坐标行 bbox。"""
+        w, h = self.PAGE_W, self.PAGE_H
+        middle_block = {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h]}
+        model_page = [
+            {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+             'lines': [{'bbox': [80 / w, 100 / h, 515 / w, 115 / h]},
+                       {'bbox': [80 / w, 120 / h, 515 / w, 135 / h]}]},
+            {'type': 'text', 'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+             'lines': [{'bbox': [80 / w, 200 / h, 515 / w, 215 / h]}]},
+        ]
+        result = extractor._match_model_lines(middle_block, model_page, w, h)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 2)
+        self.assertAlmostEqual(result[0][0], 80.0)
+        self.assertAlmostEqual(result[0][1], 100.0)
+        self.assertAlmostEqual(result[0][2], 515.0)
+        self.assertAlmostEqual(result[0][3], 115.0)
+
+    def test_match_model_lines_no_match(self):
+        """_match_model_lines: 无匹配时返回 None。"""
+        w, h = self.PAGE_W, self.PAGE_H
+        middle_block = {'type': 'image', 'bbox': [0.1, 0.1, 0.5, 0.5]}
+        model_page = [{'type': 'text', 'bbox': [0.1, 0.1, 0.5, 0.5], 'lines': []}]
+        self.assertIsNone(extractor._match_model_lines(middle_block, model_page, w, h))
+        middle_block = {'type': 'text', 'bbox': [0.1, 0.1, 0.5, 0.5]}
+        model_page = [{'type': 'image', 'bbox': [0.1, 0.1, 0.5, 0.5], 'lines': []}]
+        self.assertIsNone(extractor._match_model_lines(middle_block, model_page, w, h))
+        middle_block = {'type': 'text', 'bbox': [0.1, 0.1, 0.5, 0.5]}
+        model_page = [{'type': 'text', 'bbox': [0.8, 0.8, 0.9, 0.9], 'lines': [{'bbox': [0.8, 0.8, 0.9, 0.9]}]}]
+        self.assertIsNone(extractor._match_model_lines(middle_block, model_page, w, h))
+
+
+    def test_build_lines_from_line_bboxes(self):
+        """_build_lines_from_line_bboxes: 每行一个 span, bbox 与行相同。"""
+        abs_bbox = [80.0, 100.0, 515.0, 160.0]
+        line_bboxes = [
+            [80.0, 100.0, 515.0, 115.0],
+            [80.0, 120.0, 515.0, 135.0],
+            [80.0, 140.0, 515.0, 155.0],
+        ]
+        spans = [{'bbox': abs_bbox, 'type': 'text', 'content': 'hello', 'score': 1.0}]
+        lines = extractor._build_lines_from_line_bboxes(line_bboxes, spans, abs_bbox)
+        self.assertEqual(len(lines), 3)
+        for i, ln in enumerate(lines):
+            self.assertEqual(ln['bbox'], line_bboxes[i])
+            self.assertEqual(len(ln['spans']), 1)
+            self.assertEqual(ln['spans'][0]['bbox'], line_bboxes[i])
+        fallback = extractor._build_lines_from_line_bboxes([], spans, abs_bbox)
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(fallback[0]['bbox'], abs_bbox)
+
+    def test_middle_block_to_legacy_with_lines(self):
+        """_middle_block_to_legacy: 提供 line_bboxes 时按行拆分 lines/spans。"""
+        w, h = self.PAGE_W, self.PAGE_H
+        block = {'type': 'text', 'index': 1,
+                 'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                 'content': [{'type': 'text', 'content': 'hello world'}]}
+        line_bboxes = [
+            [80.0, 100.0, 515.0, 115.0],
+            [80.0, 120.0, 515.0, 135.0],
+            [80.0, 140.0, 515.0, 155.0],
+        ]
+        legacy = extractor._middle_block_to_legacy(block, w, h, line_bboxes=line_bboxes)
+        self.assertEqual(legacy['type'], 'text')
+        self.assertEqual(len(legacy['lines']), 3)
+        self.assertEqual(legacy['lines'][0]['bbox'], [80.0, 100.0, 515.0, 115.0])
+        legacy_no_lines = extractor._middle_block_to_legacy(block, w, h)
+        self.assertEqual(len(legacy_no_lines['lines']), 1)
+
+    def test_c9_improves_with_lines(self):
+        """C9: 有 lines 数据时能测量真实行结构。"""
+        w, h = self.PAGE_W, self.PAGE_H
+        blocks_with_lines = []
+        blocks_without_lines = []
+        for i, y0 in enumerate([100, 200, 300]):
+            block_bbox = [80 / w, y0 / h, 515 / w, (y0 + 60) / h]
+            block = {'type': 'text', 'index': i + 1, 'bbox': block_bbox,
+                     'content': [{'type': 'text', 'content': f'para{i}'}]}
+            line_bboxes = []
+            y = y0
+            for _ in range(4):
+                line_bboxes.append([80.0, float(y), 515.0, float(y + 15)])
+                y += 20
+            legacy_with = extractor._middle_block_to_legacy(block, w, h, line_bboxes=line_bboxes)
+            blocks_with_lines.append(legacy_with)
+            legacy_without = extractor._middle_block_to_legacy(block, w, h)
+            blocks_without_lines.append(legacy_without)
+        c9_with = extractor._c9_format_score(blocks_with_lines)
+        c9_without = extractor._c9_format_score(blocks_without_lines)
+        self.assertGreater(c9_with, 0.8)
+        self.assertGreater(c9_without, 0.0)
+        self.assertGreaterEqual(c9_with, c9_without - 0.1)
+
+    def test_load_40_dir_with_lines(self):
+        """端到端: 含 lines 的 4.0 目录加载后 C9 应反映行级结构。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self._make_40_dir_with_lines(tmp)
+            agg = extractor.load_book_from_hybrid_dir(backend)
+            self.assertEqual(len(agg.pages), 1)
+            p = agg.pages[0]
+            self.assertEqual(p['text_blocks'], 3)
+            c9 = p['metrics'][8]
+            self.assertGreater(c9, 0.5)
+
 
 
 class TestBookQa(unittest.TestCase):
@@ -1028,6 +1333,108 @@ class TestCreateResultZipLayoutPdf(unittest.TestCase):
             )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestLayoutQualityV1API(unittest.TestCase):
+    """V1 API (mineru/parser/api_server.py) 的 layout_quality 输出格式与 JobStore 持久化。
+
+    4.0 架构中 layout_quality 是解析任务的输出格式 (在 _run_job 内从内存
+    ParseResult 计算), 不再是 3.x 的独立 /layout_quality 端点。
+    """
+
+    def _mock_parse_result(self):
+        from types import SimpleNamespace
+
+        w, h = 595.0, 842.0
+        middle_dict = {
+            'schema': 'docvortex.middle', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {}, 'is_full_document': True,
+            'pages': [{
+                'page_idx': 0,
+                'blocks': [
+                    {'type': 'text', 'index': 1,
+                     'bbox': [80 / w, 100 / h, 515 / w, 160 / h],
+                     'content': [{'type': 'text', 'content': 'hello world'}]},
+                    {'type': 'text', 'index': 2,
+                     'bbox': [80 / w, 200 / h, 515 / w, 260 / h],
+                     'content': [{'type': 'text', 'content': 'second para'}]},
+                    {'type': 'text', 'index': 3,
+                     'bbox': [80 / w, 300 / h, 515 / w, 360 / h],
+                     'content': [{'type': 'text', 'content': 'third para'}]},
+                ],
+            }],
+        }
+        model_dict = {
+            'schema': 'docvortex.model', 'schema_version': '2.0',
+            'metadata': {'file_suffix': 'pdf',
+                         'producer': {'name': 'mineru', 'version': '4.0'}},
+            'extensions': {'docvortex_layout': {'version': 1, 'pages': [
+                {'page_idx': 0, 'width_pt': w, 'height_pt': h}]}},
+            'pages': [[
+                {'type': 'text', 'bbox': [80 / w, 100 / h, 515 / w, 160 / h]},
+                {'type': 'text', 'bbox': [80 / w, 200 / h, 515 / w, 260 / h]},
+                {'type': 'text', 'bbox': [80 / w, 300 / h, 515 / w, 360 / h]},
+            ]],
+            'page_index_map': [],
+        }
+        return SimpleNamespace(
+            to_dict=lambda **kw: middle_dict,
+            _model_output=SimpleNamespace(to_dict=lambda **kw: model_dict),
+        )
+
+    def test_layout_quality_is_valid_output_format(self):
+        from mineru.parser import api_server
+
+        self.assertIn('layout_quality', api_server._OUTPUT_FORMATS_LOCAL)
+        self.assertIn('layout_quality', api_server._LOCAL_PARSE_OUTPUT_FORMATS)
+
+    def test_compute_layout_quality_from_parse_result(self):
+        """_compute_layout_quality 从内存 ParseResult 计算评分 (mock, 不加载模型)。"""
+        from mineru.parser.api_server import _compute_layout_quality
+
+        out = _compute_layout_quality(self._mock_parse_result(), 'mem')
+        self.assertEqual(out['book'], 'mem')
+        self.assertTrue(0.0 <= out['score']['value'] <= 1.0)
+        self.assertIn('grade', out['score'])
+
+    def test_job_store_persistence_roundtrip(self):
+        """JobStore SQLite 持久化: 创建 -> 重启恢复 -> 中断任务标记 failed。"""
+        from types import SimpleNamespace
+
+        from mineru.parser.api_server import (
+            CreateJobRequest,
+            FileIdSource,
+            JobFileEntry,
+            JobStore,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, 'jobs.sqlite')
+            req = CreateJobRequest(
+                files=[JobFileEntry(source=FileIdSource(file_id='f1'), page_range='')],
+                tier='standard',
+                output_formats=['markdown', 'layout_quality'],
+            )
+            fs = SimpleNamespace(
+                get_file=lambda fid: SimpleNamespace(filename='demo.pdf'))
+            store1 = JobStore(concurrency=1, db_path=db)
+            rec = store1.create(req, fs)
+            rec.status = 'running'
+            store1._persist(rec)
+            store1._persistence.close()
+            store2 = JobStore(concurrency=1, db_path=db)
+            restored = store2.get(rec.id)
+            self.assertEqual(restored.status, 'failed')
+            self.assertEqual(restored.output_formats, ['markdown', 'layout_quality'])
+            self.assertEqual(restored.files[0].name, 'demo.pdf')
+
+    def test_job_store_no_persistence_without_db(self):
+        from mineru.parser.api_server import JobStore
+
+        store = JobStore(concurrency=1)
+        self.assertIsNone(store._persistence)
 
 
 if __name__ == '__main__':
