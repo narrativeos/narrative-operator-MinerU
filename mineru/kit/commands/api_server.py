@@ -59,6 +59,7 @@ def api_server_cmd(
         False, "--preload-models", help=t("Initialize VLM client and local Hybrid models at startup")
     ),
     api_key: str | None = typer.Option(None, "--api-key", help=t("Optional fixed API key")),
+    job_db_path: str = typer.Option("", "--job-db-path", help=t("SQLite path for parse-job persistence; empty disables")),
     vlm_server_url: str | None = typer.Option(
         None, "--vlm-server-url", help=t("Remote VLM URL; empty value selects local VLM")
     ),
@@ -122,6 +123,7 @@ def api_server_cmd(
                 *(["--disable-image-analysis"] if disable_image_analysis else []),
                 *(["--preload-models"] if preload_models else []),
                 *(["--api-key", api_key] if api_key else []),
+                *(["--job-db-path", job_db_path] if job_db_path else []),
             ],
             prog_name="mineru-kit api-server",
             standalone_mode=False,

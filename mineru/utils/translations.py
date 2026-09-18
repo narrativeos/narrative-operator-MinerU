@@ -495,6 +495,7 @@ ZH_MESSAGES: dict[str, str] = {
     ),
     "Initialize VLM client and local Hybrid models at startup": "启动时初始化 VLM 客户端与本地 Hybrid 模型",
     "Optional fixed API key": "可选的固定 API key",
+    "SQLite path for parse-job persistence; empty disables": "解析任务持久化的 SQLite 路径;留空禁用持久化",
     "Remote VLM URL; empty value selects local VLM": "远程 VLM URL;留空选择本地 VLM",
     "Bearer key for the remote VLM server": "远程 VLM 服务的 Bearer key",
     "Remote VLM model name; empty value enables discovery": "远程 VLM 模型名;留空启用自动发现",

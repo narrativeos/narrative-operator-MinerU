@@ -7,7 +7,7 @@ CLI（cli.py）继续使用 pipeline.run_book_qa（带 CSV 落盘与报告打印
 from __future__ import annotations
 
 from .ahp import ahp_subjective_weights
-from .extractor import load_book_from_hybrid_dir
+from .extractor import load_book_from_hybrid_dir, load_book_from_parse_result
 from .indicators import IND_NAMES
 from .scoring import book_quality_score, grade_of
 
@@ -17,6 +17,7 @@ __all__ = [
     "DEFAULT_MIN_TEXT_BLOCKS",
     "analyze_book",
     "analyze_hybrid_dir",
+    "analyze_parse_result",
 ]
 
 # QA 默认参数（pipeline / cli 从这里复用，保持单一来源）
@@ -117,4 +118,28 @@ def analyze_hybrid_dir(
         FileNotFoundError: model/middle json 缺失或无法配对。
     """
     agg = load_book_from_hybrid_dir(hybrid_dir)
+    return analyze_book(agg, n_sigma, coverage_min, min_text_blocks, w_sub)
+
+
+def analyze_parse_result(
+    result,
+    book_name: str | None = None,
+    n_sigma: float = DEFAULT_N_SIGMA,
+    coverage_min: float = DEFAULT_COVERAGE_MIN,
+    min_text_blocks: int = DEFAULT_MIN_TEXT_BLOCKS,
+    w_sub=None,
+) -> dict:
+    """对内存中的 4.0 ParseResult 执行整书版面质量分析 (无需落盘)。
+
+    供 V1 API (mineru/parser/api_server.py) 在解析完成后直接评分。
+    页尺寸取自 model_output 的 docvortex_layout 扩展, 缺失时兜底 A4。
+
+    Args:
+        result: ``mineru.parser.base.ParseResult`` 实例。
+        book_name: 书名 (默认 'parse_result')。
+
+    Raises:
+        ValueError: 去噪后无有效正文页 (与 analyze_book 一致)。
+    """
+    agg = load_book_from_parse_result(result, book_name=book_name)
     return analyze_book(agg, n_sigma, coverage_min, min_text_blocks, w_sub)

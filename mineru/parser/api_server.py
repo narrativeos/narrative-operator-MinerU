@@ -19,6 +19,7 @@ import os
 import pathlib
 import secrets
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -88,6 +89,7 @@ _LOCAL_PARSE_OUTPUT_FORMATS: tuple[OutputFormat, ...] = (
     "markdown",
     "middle_json",
     "structured_content",
+    "layout_quality",
     "zip",
 )
 _BASE_PARSE_SOURCES: tuple[SourceType, ...] = ("file_id", "url", "inline")
@@ -149,6 +151,7 @@ OutputFormat = Literal[
     "markdown",
     "middle_json",
     "structured_content",
+    "layout_quality",
     "html",
     "latex",
     "docx",
@@ -519,6 +522,7 @@ class OutputFiles(BaseModel):
     markdown: OutputFileRef | None = None
     middle_json: OutputFileRef | None = None
     structured_content: OutputFileRef | None = None
+    layout_quality: OutputFileRef | None = None
     html: OutputFileRef | None = None
     latex: OutputFileRef | None = None
     docx: OutputFileRef | None = None
@@ -992,6 +996,27 @@ def _build_self_contained_zip_output(result: ParseResult) -> bytes:
     return buf.getvalue()
 
 
+def _compute_layout_quality(result: ParseResult, book_name: str) -> dict:
+    """计算解析结果的版面质量评分 (fork 扩展, 基于 scripts/layout_quality)。
+
+    ``scripts/`` 位于仓库根目录 (mineru 包的上一级)。editable 安装或从仓库根
+    运行时可直接导入; 非 editable 安装时按本文件位置兜底定位仓库根加入 sys.path。
+
+    Raises:
+        ValueError: 去噪后无有效正文页 (与 layout_quality 服务一致)。
+    """
+    try:
+        from scripts.layout_quality.service import analyze_parse_result
+    except ImportError:
+        import sys
+
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from scripts.layout_quality.service import analyze_parse_result
+    return analyze_parse_result(result, book_name=book_name)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  DEPENDENCIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -1108,9 +1133,91 @@ class _JobRecord:
         if self.progress is None:
             self.progress = JobProgress()
 
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为 JSON 可存储的 dict (供 SQLite 持久化)。"""
+        return {
+            "id": self.id,
+            "status": self.status,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "tier": self.tier,
+            "output_formats": list(self.output_formats),
+            "progress": self.progress.model_dump() if self.progress else None,
+            "files": [f.model_dump() for f in self.files],
+            "links": self.links.model_dump() if self.links else None,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "_JobRecord":
+        """从 to_dict() 的 dict 重建 _JobRecord。"""
+        return cls(
+            id=d["id"],
+            status=d["status"],
+            created_at=d["created_at"],
+            started_at=d.get("started_at"),
+            finished_at=d.get("finished_at"),
+            tier=d["tier"],
+            output_formats=d.get("output_formats") or ["markdown"],
+            progress=JobProgress(**d["progress"]) if d.get("progress") else None,
+            files=[JobFileResult(**f) for f in d.get("files", [])],
+            links=JobLinks(**d["links"]) if d.get("links") else None,
+        )
+
+
+class _JobPersistence:
+    """JobStore 的 SQLite 持久化层 (fork 扩展)。
+
+    将 _JobRecord 序列化为 JSON 存入 jobs 表, 使解析任务可跨 worker 重启恢复。
+    使用 WAL 模式与线程锁保证事件循环内同步写入的线程安全。
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        pathlib.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)")
+        self._conn.commit()
+
+    def upsert(self, rec: _JobRecord) -> None:
+        data = json.dumps(rec.to_dict(), ensure_ascii=False)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO jobs (job_id, status, created_at, data) VALUES (?, ?, ?, ?)",
+                (rec.id, rec.status, rec.created_at, data),
+            )
+            self._conn.commit()
+
+    def load_all(self) -> list[_JobRecord]:
+        with self._lock:
+            rows = self._conn.execute("SELECT data FROM jobs").fetchall()
+        records = []
+        for (raw,) in rows:
+            try:
+                records.append(_JobRecord.from_dict(json.loads(raw)))
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("Skipping corrupt persisted job record: %s", exc)
+        return records
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
 
 class JobStore:
-    def __init__(self, concurrency: int = 1) -> None:
+    def __init__(self, concurrency: int = 1, db_path: str | None = None) -> None:
         self._jobs: dict[str, _JobRecord] = {}
         self._concurrency = max(1, concurrency)
         self._semaphore = asyncio.Semaphore(self._concurrency)
@@ -1118,6 +1225,35 @@ class JobStore:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._closing = False
         self.runtime_owner = RuntimeOwner()
+        self._persistence: _JobPersistence | None = None
+        if db_path:
+            self._persistence = _JobPersistence(db_path)
+            self._restore_jobs()
+
+    def _restore_jobs(self) -> None:
+        """启动时从 SQLite 恢复历史任务; 中断的 running/queued 任务标记为 failed。"""
+        if self._persistence is None:
+            return
+        restored = self._persistence.load_all()
+        recovered = 0
+        for rec in restored:
+            # 重启前正在执行或排队的任务无法继续, 标记为 failed 以便客户端感知。
+            if rec.status in ("queued", "running"):
+                rec.status = "failed"
+                rec.finished_at = rec.finished_at or self._now()
+                recovered += 1
+            self._jobs[rec.id] = rec
+        if restored:
+            logger.info(
+                "Restored %d persisted job(s) from %s (%d interrupted marked failed)",
+                len(restored),
+                self._persistence._db_path,
+                recovered,
+            )
+
+    def _persist(self, rec: _JobRecord) -> None:
+        if self._persistence is not None:
+            self._persistence.upsert(rec)
 
     def start_task(self, rec: _JobRecord, operation: Callable[[], Awaitable[None]]) -> None:
         """保存真实后台任务及所属应用租约，排队取消也不会开始解析。"""
@@ -1147,6 +1283,7 @@ class JobStore:
                     logger.error("Parse job task failed: %s", rec.id, exc_info=(type(error), error, error.__traceback__))
                     if rec.status != "canceled":
                         rec.status = "failed"
+            self._persist(rec)
 
         task = asyncio.create_task(run_owned(), name=f"mineru-job-{rec.id}")
         self._tasks[rec.id] = task
@@ -1168,6 +1305,9 @@ class JobStore:
             from ..model.vlm.runtime import ModelSingleton
 
             await run_sync(ModelSingleton().release_owner, self.runtime_owner)
+        if self._persistence is not None:
+            self._persistence.close()
+            self._persistence = None
 
     @staticmethod
     def _new_job_id() -> str:
@@ -1205,6 +1345,7 @@ class JobStore:
             )
         rec.progress.total = len(rec.files)
         self._jobs[job_id] = rec
+        self._persist(rec)
         return rec
 
     def get(self, job_id: str) -> _JobRecord:
@@ -1231,6 +1372,7 @@ class JobStore:
         task = self._tasks.get(job_id)
         if task is not None and not task.done():
             task.cancel()
+        self._persist(rec)
         return rec
 
     def list_jobs(
@@ -1430,12 +1572,15 @@ async def _run_job(
     max_url_bytes: int = _MAX_FILE_SIZE_BYTES_DEFAULT,
     flash_enabled: bool = True,
     vlm_config: VlmConfig | None = None,
+    job_store: JobStore | None = None,
 ) -> None:
     """执行解析任务，使用所属服务的 VLM 配置并记录每个文件的成功或失败。"""
     if rec.status == "canceled":
         return
     rec.status = "running"
     rec.started_at = JobStore._now()
+    if job_store is not None:
+        job_store._persist(rec)
 
     with tempfile.TemporaryDirectory(prefix="mineru_job_") as tmpdir:
         for i, entry in enumerate(req.files):
@@ -1524,6 +1669,26 @@ async def _run_job(
                         fid = file_store.create_file_for_output(f"{fr.name}.structured_content.json", cl2, sha256hex=sha)
                         output_files.structured_content = OutputFileRef(file_id=fid, bytes=len(cl2))
 
+                # layout_quality (fork 扩展): 从内存 ParseResult 计算版面质量评分。
+                # 评分失败 (如去噪后无有效正文页) 不影响解析产物, 仅记录告警。
+                if "layout_quality" in out_formats:
+                    try:
+                        lq = await run_sync(_compute_layout_quality, result, fr.name)
+                        lq_bytes = _json_utf8_bytes(lq)
+                        lq_sha = hashlib.sha256(lq_bytes).hexdigest()
+                        file_store.store_blob(lq_bytes, sha256hex=lq_sha)
+                        lq_fid = file_store.create_file_for_output(
+                            f"{fr.name}.layout_quality.json", lq_bytes, sha256hex=lq_sha
+                        )
+                        output_files.layout_quality = OutputFileRef(file_id=lq_fid, bytes=len(lq_bytes))
+                    except Exception:
+                        logger.warning(
+                            "Layout quality scoring failed for job_id=%s file=%r; parse output is unaffected",
+                            rec.id,
+                            fr.name,
+                            exc_info=True,
+                        )
+
                 # zip
                 if "zip" in out_formats:
                     zip_bytes = await run_sync(_build_self_contained_zip_output, result)
@@ -1542,6 +1707,8 @@ async def _run_job(
                     parser_version=__version__,
                 )
                 rec.progress.completed += 1
+                if job_store is not None:
+                    job_store._persist(rec)
 
             except Exception as exc:
                 if rec.status == "canceled":
@@ -1559,6 +1726,8 @@ async def _run_job(
                 else:
                     fr.error = ErrorDetail(type="engine_error", code="parse_failed", message=str(exc))
                 rec.progress.failed += 1
+                if job_store is not None:
+                    job_store._persist(rec)
 
     if rec.status != "canceled":
         if rec.progress.failed == rec.progress.total:
@@ -1568,6 +1737,8 @@ async def _run_job(
         else:
             rec.status = "completed"
     rec.finished_at = JobStore._now()
+    if job_store is not None:
+        job_store._persist(rec)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1969,6 +2140,7 @@ async def create_job(
             max_url_bytes=max_url_bytes_val,
             flash_enabled=flash_enabled_val,
             vlm_config=vlm_config_val,
+            job_store=job_store,
         )
 
     job_store.start_task(rec, _bg_run)
@@ -2249,6 +2421,7 @@ def create_app(
     image_analysis: bool = True,
     preload_models: bool = False,
     vlm_config: VlmConfig | None = None,
+    job_db_path: str = "",
 ) -> FastAPI:
     """Create a FastAPI application implementing the MinerU v1 REST API.
 
@@ -2401,7 +2574,7 @@ def create_app(
     application.state.vlm_config = vlm_config
     application.state.model_preload_error = None
     FileStore(_upload_dir).install(application.state)
-    JobStore(concurrency=concurrency).install(application.state)
+    JobStore(concurrency=concurrency, db_path=job_db_path or None).install(application.state)
     application.add_middleware(GZipMiddleware, minimum_size=1000)
 
     @application.exception_handler(ApiServerError)
@@ -2582,6 +2755,12 @@ def _build_server_log_config(log_level: str) -> dict[str, Any]:
     type=str,
     help="Optional API key. When set, clients must pass Authorization: Bearer <key> to access protected endpoints.",
 )
+@click.option(
+    "--job-db-path",
+    default="",
+    type=str,
+    help="SQLite path for parse-job persistence (fork). Empty disables persistence.",
+)
 def main(
     host: str,
     port: int,
@@ -2605,6 +2784,7 @@ def main(
     vlm_http_timeout: int | None,
     vlm_max_concurrency: int | None,
     log_level: str | None,
+    job_db_path: str,
 ) -> None:
     """合并显式 VLM 参数后启动 MinerU v1 REST API 服务，不修改全局配置。"""
     configure_standard_streams()
@@ -2657,6 +2837,7 @@ def main(
             image_analysis=not disable_image_analysis,
             preload_models=preload_models,
             vlm_config=vlm_settings,
+            job_db_path=job_db_path,
         )
     except ParseServerStartupError as exc:
         if control_watcher is not None:
