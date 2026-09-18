@@ -71,7 +71,7 @@ An existing `model.vlm.server_url` takes priority and removes the local VLM weig
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `model.vlm.engine` | `auto` | Local engine selection: `auto/llama-cpp/vllm/lmdeploy`; not used while a remote `server_url` is set |
+| `model.vlm.engine` | `auto` | Local engine selection: `auto/llama-cpp/vllm/lmdeploy/mlx`; MLX is only used when explicitly selected; not used while a remote `server_url` is set |
 | `model.vlm.server_url` | (unset) | Remote VLM inference endpoint. Must be HTTP(S) without credentials, query, or fragment; a trailing `/v1` is stripped and the URL is kept ending with `/` (reverse-proxy path prefixes are preserved) |
 | `model.vlm.api_key` | (unset) | Bearer key for the remote VLM service; environment variable `MINERU_MODEL_VLM_API_KEY` |
 | `model.vlm.model` | (unset) | Model name requested from the remote service; environment variable `MINERU_MODEL_VLM_MODEL` |

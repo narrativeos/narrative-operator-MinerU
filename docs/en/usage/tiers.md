@@ -39,7 +39,7 @@ model:
     engine: auto
 ```
 
-`small_backend` accepts `auto/onnx/torch`; `engine` accepts `auto/llama-cpp/vllm/lmdeploy`. macOS defaults to llama.cpp.
+`small_backend` accepts `auto/onnx/torch`; `engine` accepts `auto/llama-cpp/vllm/lmdeploy/mlx`; MLX is only used when explicitly selected. macOS defaults to llama.cpp.
 
 ## Resources and platform boundaries
 

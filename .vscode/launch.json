@@ -5,7 +5,7 @@
       "name": "Debug MinerU VLM Server",
       "type": "debugpy",
       "request": "launch",
-      "module": "mineru.cli.vlm_server",
+      "module": "mineru.kit.vlm_server.vllm_server",
       "args": [
         "--host",
         "0.0.0.0",
@@ -19,7 +19,6 @@
       "justMyCode": false,
       "env": {
         "MINERU_MODEL_SOURCE": "modelscope",
-        "MINERU_HYBRID_BATCH_RATIO": "1",
         "HF_ENDPOINT": "https://hf-mirror.com",
         "TORCH_CUDNN_V8_API_DISABLED": "1",
         "PYTHONUNBUFFERED": "1"
@@ -30,26 +29,16 @@
       "name": "Debug MinerU FastAPI",
       "type": "debugpy",
       "request": "launch",
-      "module": "mineru.cli.fast_api",
+      "module": "mineru.kit.commands.api_server",
       "args": [
         "--host",
         "0.0.0.0",
         "--port",
-        "8401",
-        "--enable-api-cache",
-        "--max-convert-pages",
-        "1500",
-        "--batch-max-convert-pages",
-        "100",
-        "--data-parallel-size",
-        "1",
-        "--gpu-memory-utilization",
-        "0.4"
+        "8401"
       ],
       "justMyCode": false,
       "env": {
         "MINERU_MODEL_SOURCE": "modelscope",
-        "MINERU_HYBRID_BATCH_RATIO": "1",
         "HF_ENDPOINT": "https://hf-mirror.com",
         "TORCH_CUDNN_V8_API_DISABLED": "1",
         "PYTHONUNBUFFERED": "1"
@@ -65,7 +54,6 @@
       "justMyCode": false,
       "env": {
         "MINERU_MODEL_SOURCE": "modelscope",
-        "MINERU_HYBRID_BATCH_RATIO": "1",
         "HF_ENDPOINT": "https://hf-mirror.com",
         "TORCH_CUDNN_V8_API_DISABLED": "1",
         "PYTHONUNBUFFERED": "1"
@@ -81,7 +69,6 @@
       "justMyCode": false,
       "env": {
         "MINERU_MODEL_SOURCE": "modelscope",
-        "MINERU_HYBRID_BATCH_RATIO": "1",
         "HF_ENDPOINT": "https://hf-mirror.com",
         "TORCH_CUDNN_V8_API_DISABLED": "1",
         "PYTHONUNBUFFERED": "1"
@@ -97,7 +84,6 @@
       "justMyCode": false,
       "env": {
         "MINERU_MODEL_SOURCE": "modelscope",
-        "MINERU_HYBRID_BATCH_RATIO": "1",
         "HF_ENDPOINT": "https://hf-mirror.com",
         "TORCH_CUDNN_V8_API_DISABLED": "1",
         "PYTHONUNBUFFERED": "1"

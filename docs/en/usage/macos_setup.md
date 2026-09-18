@@ -1,6 +1,6 @@
 # macOS Deployment Guide
 
-> **Important**: MinerU officially states that Docker deployment is not suitable for macOS. This guide provides the best deployment options for macOS.
+> **Important**: MinerU officially states that Docker deployment is not suitable for macOS. This guide provides the best deployment options for macOS (MinerU 4.0).
 
 ## System Requirements
 
@@ -10,26 +10,22 @@
 - **Disk Space**: 20GB+ (SSD recommended)
 - **Python Version**: 3.10-3.13
 
-## Recommended Solution: LM Studio + http-client Backend
+## 4.0 Architecture Overview
 
-This solution uses local LM Studio to provide an OpenAI-compatible VLM inference service, combined with MinerU's `http-client` backend, achieving the best parsing accuracy (95+ score) on macOS.
+MinerU 4.0 has two inference paths on macOS:
 
-### Step 1: Install LM Studio
+1. **Local engines (recommended)**: small models (ONNX/Torch) + a local VLM engine
+   (on Apple Silicon, `auto` defaults to llama.cpp; `mlx` can be selected explicitly).
+   No external service is required; models are downloaded automatically per tier
+   (Basic needs only the small-model package, Standard also needs the VLM model).
+2. **Remote VLM service (optional)**: use an OpenAI-compatible service such as
+   LM Studio for VLM inference, configured via `model.vlm.server_url`. Small models
+   still run locally according to the selected tier.
 
-1. Visit https://lmstudio.ai/ to download and install LM Studio
-2. Launch LM Studio
-3. Search and download supported VLM models:
-   - Recommended models: `Qwen2.5-VL-7B-Instruct`, `Qwen2-VL-7B-Instruct`, or other vision-language models
-   - Download models in the "My Models" tab
-4. Load the model:
-   - Select the downloaded model on the left
-   - Click "Load" to load the model into memory
-5. Start the local server:
-   - Go to the "Local Server" tab
-   - Click "Start Server" to launch the OpenAI-compatible server
-   - Default port is `1234`, can be changed in settings
+Parsing tiers: `flash` (plain text extraction, no models), `basic` (small models),
+`standard` / `advanced` (small models + VLM).
 
-### Step 2: Install MinerU
+## Step 1: Install MinerU
 
 ```bash
 # Upgrade pip and install uv
@@ -40,173 +36,107 @@ pip install uv -i https://mirrors.aliyun.com/pypi/simple
 uv pip install -U "mineru[all]" -i https://mirrors.aliyun.com/pypi/simple
 ```
 
-> **Note**: `hybrid-http-client` requires locally installing `mineru[all]` to provide pipeline dependencies (torch, opencv, etc.). Apple Silicon (M1/M2/M3) will automatically use MPS (Metal Performance Shaders) to accelerate pipeline computations.
+> **Note**: Standard/Advanced tiers require local small-model dependencies (torch,
+> opencv, etc.), provided by `mineru[all]`. Apple Silicon automatically uses MPS
+> (Metal Performance Shaders) for acceleration.
 
-### Step 3: Configure Model Source (Optional, recommended for China)
+## Step 2: Configure Model Source (Optional, recommended for China)
 
 ```bash
 # Use ModelScope as model source (faster access in China)
 export MINERU_MODEL_SOURCE=modelscope
 ```
 
-### Step 4: Check if LM Studio is Running
+See [Model Download and Configuration](./model_source.md) for downloading,
+checking, and offline usage.
+
+## Step 3 (Optional): Use LM Studio as a Remote VLM Service
+
+If you don't want to run a local VLM engine, you can use LM Studio to provide an
+OpenAI-compatible VLM inference service:
+
+1. Visit https://lmstudio.ai/ to download and install LM Studio
+2. Search and download a supported VLM model (e.g. `Qwen2.5-VL-7B-Instruct` or
+   other vision-language models)
+3. After loading the model, start the OpenAI-compatible server in the
+   "Local Server" tab (default port `1234`)
+4. Point MinerU at the service (environment variable or the `model.vlm` fields
+   in `config.yaml`):
 
 ```bash
-# Use script to check LM Studio
-bash scripts/start_mineru_local.sh check-lm-studio
-
-# Custom port
-export LM_STUDIO_PORT=1234
-bash scripts/start_mineru_local.sh check-lm-studio
+export MINERU_MODEL_VLM_SERVER_URL=http://127.0.0.1:1234/v1
+# If the model name exposed by LM Studio doesn't match auto-discovery, set it explicitly:
+export MINERU_MODEL_VLM_MODEL=<model name in LM Studio>
 ```
 
-### Step 5: One-Click Start MinerU Services
+> **Note**: `model.vlm.server_url` is a model inference endpoint, not the MinerU
+> V1 document parsing API. Once configured, Standard/Advanced VLM inference goes
+> through LM Studio while small models still run locally. See
+> [Model Download and Configuration](./model_source.md#remote-vlm-service) for
+> the full field reference.
 
-```bash
-# One-click start all services (automatically checks LM Studio)
-bash scripts/start_mineru_local.sh start
-```
+## Step 4: Start Services
 
-After starting, you can check service status:
-
-```bash
-# Check service status
-bash scripts/start_mineru_local.sh status
-```
-
-Example output:
-```
-[info] MinerU Service Status:
-┌─────────────────────────────────────────────────────────────────┐
-│  LM Studio              : ✓ (port 1234)                         │
-│  MinerU API             : ✓ (port 8000)                         │
-│  MinerU Gradio          : ✓ (port 7860)                         │
-│  MinerU OpenAI          : ✗ (port 30000)                        │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Common Commands:**
+One-click script modes (4.0 launches everything through `mineru-kit` subcommands):
 
 | Command | Description |
 |---------|-------------|
-| `bash scripts/start_mineru_local.sh start` | One-click start all services |
-| `bash scripts/start_mineru_local.sh stop` | Stop all services |
-| `bash scripts/start_mineru_local.sh status` | Check service status |
+| `bash scripts/start_mineru_local.sh gradio` | Start the Web UI (`mineru-kit webui`, default 8400, auto-manages its own V1 API server) |
+| `bash scripts/start_mineru_local.sh api` | Start the V1 parsing API (`mineru-kit api-server`, default 8401) |
+| `bash scripts/start_mineru_local.sh openai` | Start the OpenAI-compatible VLM service (`mineru-kit vlm-server`, default 8402) |
+| `bash scripts/start_mineru_local.sh all` | Start the VLM service and the Web UI together |
 
-### Step 6: Use http-client Backend for Document Parsing
+When a port is occupied the script automatically picks the next free port; the
+actual port is shown in the startup log as `[start] ... on :<port>`. See
+`LOCAL_START.md` in the repository root for details.
 
-```bash
-# High-accuracy hybrid mode (recommended, requires local pipeline dependencies)
-mineru -p <input_path> -o <output_path> -b hybrid-http-client -u http://127.0.0.1:1234
-
-# Lightweight remote mode (no local torch required, Chinese and English only)
-mineru -p <input_path> -o <output_path> -b vlm-http-client -u http://127.0.0.1:1234
-```
-
-## Backend Selection Guide
-
-| Backend | Accuracy | Local Dependencies | Use Case |
-|---------|----------|-------------------|----------|
-| `hybrid-http-client` | 95+ (High) | Requires mineru[all] + torch | Multi-language support, best accuracy |
-| `vlm-http-client` | 95+ (High) | **No torch required** | Edge devices, Chinese/English only |
-| `pipeline` | 85+ | Requires mineru[pipeline] | Pure CPU, no additional services |
-
-### hybrid-http-client vs vlm-http-client Selection Guide
-
-- **Choose `hybrid-http-client`**:
-  - Need multi-language support (Chinese, English, Japanese, Korean, etc.)
-  - Pursue best parsing accuracy
-  - Device meets mineru[all] installation requirements
-
-- **Choose `vlm-http-client`**:
-  - Only need Chinese and English support
-  - Limited device resources, cannot install torch
-  - Edge device deployment
-
-### VLM Backend Modes Architecture
-
-MinerU supports two VLM backend modes. Understanding their differences is crucial for proper configuration:
-
-#### 1. `hybrid-http-client` Backend (Hybrid Mode)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        hybrid-http-client                       │
-│                                                                 │
-│   MinerU API                                                    │
-│   ├── Local MinerU Model (MinerU2.5-Pro)                        │
-│   │    ├── Layout Analysis                                      │
-│   │    ├── OCR Text Recognition                                 │
-│   │    ├── Formula Recognition                                  │
-│   │    └── Table Recognition                                    │
-│   │         ↓ When complex pages need VLM assistance            │
-│   └──→ LM Studio (http://127.0.0.1:1234)                       │
-│         └── VLM Model (e.g., Qwen2.5-VL-7B)                    │
-│                                                                 │
-│   Features:                                                     │
-│   - Local Model: MinerU2.5-Pro (auto-downloaded)                │
-│   - Inference Engine: mlx-engine (Apple Silicon GPU acceleration)│
-│   - LM Studio: Assists with complex page analysis               │
-│   - Accuracy: Highest (95+)                                     │
-│   - Memory: Higher (loads both local model + LM Studio model)   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Workflow:**
-1. MinerU loads local model (MinerU2.5-Pro), using mlx-engine for Apple Silicon acceleration
-2. For standard pages, local model independently completes layout analysis, OCR, formula/table recognition
-3. For complex pages (charts, special layouts), calls LM Studio's VLM model for assistance
-4. Merges results from local model and VLM, outputs final parsing result
-
-#### 2. `vlm-http-client` Backend (Pure Remote Mode)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      vlm-http-client                            │
-│                                                                 │
-│   MinerU API                                                    │
-│   └──→ LM Studio (http://127.0.0.1:1234)                       │
-│         └── VLM Model (e.g., Qwen2.5-VL-7B)                    │
-│                                                                 │
-│   Features:                                                     │
-│   - Local Model: Not used                                        │
-│   - Inference Engine: Fully relies on LM Studio                 │
-│   - Memory: Lower (only needs LM Studio model)                  │
-│   - Accuracy: High (95+)                                         │
-│   - Limitation: Chinese and English only                        │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Workflow:**
-1. MinerU does not load any local models
-2. All page analysis requests are sent directly to LM Studio
-3. LM Studio's VLM model independently completes all analysis tasks
-4. Returns results to MinerU for post-processing
-
-#### Model Location Comparison
-
-| Component | hybrid-http-client | vlm-http-client |
-|-----------|-------------------|-----------------|
-| MinerU2.5-Pro Model | ✅ Driven by MinerU code (mlx-engine) | ❌ Not loaded |
-| LM Studio Model | ✅ Driven by LM Studio (assistance) | ✅ Driven by LM Studio (primary) |
-| Model Download Location | `~/.cache/modelscope/hub/models/OpenDataLab/MinerU2.5-Pro-*` | N/A |
-| GPU Acceleration | Apple Silicon MPS (mlx-engine) | Managed by LM Studio |
-
-> **Important Note**: The MinerU2.5-Pro model is **driven by MinerU code**, using `mlx-engine` on Apple Silicon. The LM Studio model is **driven by LM Studio software**. They are independent models running in separate processes.
-
-## Alternative Solution: Pure CPU Operation
-
-If you don't want to install LM Studio, you can use the `pipeline` backend to run in a pure CPU environment:
+## Step 5: Parse Documents
 
 ```bash
-# Install MinerU
-uv pip install -U "mineru[all]" -i https://mirrors.aliyun.com/pypi/simple
+# Standard tier (small models + VLM, recommended)
+mineru-kit parse <input_path> -o <output_path> --tier standard
 
-# Use pipeline backend (pure CPU)
-mineru -p <input_path> -o <output_path> -b pipeline
+# Basic tier (small models only, runs on CPU)
+mineru-kit parse <input_path> -o <output_path> --tier basic
+
+# Flash tier (plain text extraction, no models)
+mineru-kit parse <input_path> -o <output_path> --tier flash
 ```
 
-> **Note**: The `pipeline` backend has an accuracy of about 85+, suitable for scenarios with low accuracy requirements or quick testing.
+## Tier Selection Guide
+
+| Tier | Model Dependencies | Use Case |
+|------|--------------------|----------|
+| `flash` | None | Plain text extraction, quick preview |
+| `basic` | Small-model package | Runs on CPU, everyday documents |
+| `standard` / `advanced` | Small-model package + VLM model (or a remote VLM service) | Complex layouts, formulas, tables; best accuracy |
+
+### Local Engines vs Remote VLM Service
+
+- **Choose local engines (default)**:
+  - No extra service required, works out of the box
+  - On Apple Silicon, `auto` defaults to llama.cpp (CPU inference); `mlx` can be
+    selected explicitly (requires `mlx-vlm`)
+  - Models are downloaded automatically per tier on first run
+
+- **Choose a remote VLM service (LM Studio)**:
+  - Limited local memory to host both small models and a VLM
+  - You want to reuse a model already loaded in LM Studio
+  - Note: small models still run locally according to the tier; `server_url`
+    only replaces VLM inference
+
+## Alternative: CPU-Only Operation
+
+If you don't want to run a VLM at all, use the `basic` tier (small models only),
+which runs comfortably on CPU:
+
+```bash
+mineru-kit parse <input_path> -o <output_path> --tier basic
+```
+
+> **Note**: `basic` trades some accuracy on complex layouts for low resource
+> usage. Use `standard`/`advanced` (local VLM engine or a remote VLM service)
+> when accuracy matters.
 
 ## Environment Variables Configuration
 
@@ -214,18 +144,14 @@ mineru -p <input_path> -o <output_path> -b pipeline
 # Model source configuration (recommended for China)
 export MINERU_MODEL_SOURCE=modelscope
 
-# LM Studio port (optional, default 1234)
-export LM_STUDIO_PORT=1234
+# Remote VLM service (optional, e.g. LM Studio)
+export MINERU_MODEL_VLM_SERVER_URL=http://127.0.0.1:1234/v1
 
-# GPU memory utilization (Apple Silicon can be lowered to avoid memory pressure)
-export MINERU_GPU_MEMORY_UTILIZATION=0.35
+# Local VLM engine (optional: auto/llama-cpp/vllm/lmdeploy/mlx; MLX is explicit-only)
+export MINERU_MODEL_VLM_ENGINE=auto
 
-# Batch processing configuration
-export MINERU_HYBRID_BATCH_RATIO=1
-
-# Cache configuration
-export MINERU_ENABLE_GRADIO_UI_CACHE=true
-export MINERU_ENABLE_API_CACHE=true
+# Small-model backend (optional: auto/onnx/torch)
+export MINERU_MODEL_SMALL_BACKEND=auto
 ```
 
 ## Frequently Asked Questions
@@ -235,40 +161,42 @@ export MINERU_ENABLE_API_CACHE=true
 **Solution**:
 1. Ensure a model is loaded (select model in "My Models" and click Load)
 2. Check if port is occupied (default 1234)
-3. Try changing port: modify port number in LM Studio settings
+3. Try changing port: modify port number in LM Studio settings, and update
+   `MINERU_MODEL_VLM_SERVER_URL` accordingly
 
 ### Q2: Parsing is slow
 
 **Solution**:
-1. Adjust `MINERU_GPU_MEMORY_UTILIZATION` parameter (default 0.4, can be increased)
-2. Ensure MPS acceleration with Apple Silicon chip
+1. Ensure MPS acceleration with an Apple Silicon chip
+2. Select the `mlx` engine explicitly (requires `mlx-vlm>=0.7.0,<0.8.0`):
+   `export MINERU_MODEL_VLM_ENGINE=mlx`
 3. Reduce number of concurrent tasks
 
 ### Q3: Insufficient memory
 
 **Solution**:
-1. Lower `MINERU_GPU_MEMORY_UTILIZATION` to 0.2-0.3
-2. Set `MINERU_HYBRID_BATCH_RATIO=1`
-3. Close other memory-intensive applications
-4. Consider using `vlm-http-client` backend to reduce local memory usage
+1. Close other memory-intensive applications
+2. Use a remote VLM service (LM Studio) for VLM inference to reduce local memory usage
+3. Use the `basic` tier (no VLM loaded)
 
 ### Q4: Cannot access ModelScope
 
 **Solution**:
 1. Check network connection
 2. Try switching to huggingface: `export MINERU_MODEL_SOURCE=huggingface`
-3. Or use local models: `export MINERU_MODEL_SOURCE=local`
+3. Or use local models: `export MINERU_MODEL_SOURCE=local` (models must be downloaded first)
 
 ### Q5: Does Intel Mac support GPU acceleration?
 
-**Answer**: Intel Mac does not support MPS acceleration, can only run on CPU. Recommended to use `pipeline` backend or `http-client` backend with LM Studio.
+**Answer**: Intel Mac does not support MPS acceleration and can only run on CPU.
+Use the `basic` tier, or combine a remote VLM service (LM Studio) with the
+`standard` tier.
 
 ## Performance Optimization Tips
 
 1. **Use Apple Silicon**: M1/M2/M3 series chips support MPS acceleration, significantly outperforming Intel
-2. **Adjust memory utilization**: Adjust `MINERU_GPU_MEMORY_UTILIZATION` based on device memory
-3. **Enable caching**: Set `MINERU_ENABLE_API_CACHE=true` to avoid duplicate parsing
-4. **Batch processing**: Use directory as input to process multiple files at once
+2. **Pick the right tier**: use `basic` for everyday documents, `standard`/`advanced` for complex ones
+3. **Batch processing**: Use a directory as input to process multiple files at once
 
 ## Service Management
 
@@ -276,20 +204,13 @@ export MINERU_ENABLE_API_CACHE=true
 
 ```bash
 # One-click start (recommended)
-bash scripts/start_mineru_local.sh start
-```
-
-### Check Status
-
-```bash
-bash scripts/start_mineru_local.sh status
+bash scripts/start_mineru_local.sh all
 ```
 
 ### Stop Services
 
-```bash
-bash scripts/start_mineru_local.sh stop
-```
+- Single-service modes (`gradio/api/openai`): press `Ctrl+C` in the terminal.
+- `all` mode: `Ctrl+C` stops all child processes together.
 
 ## Related Documentation
 

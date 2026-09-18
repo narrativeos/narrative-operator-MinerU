@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Start MinerU Gradio",
+      "label": "Start MinerU Web UI",
       "type": "shell",
-      "command": "python -m mineru.cli.gradio_app --server-name 0.0.0.0 --server-port 8400 --enable-api true --enable-ui-cache --max-convert-pages 1500 --batch-max-convert-pages 100 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "command": "mineru-kit webui --server-name 0.0.0.0 --server-port 8400 --enable-api true",
       "group": "build",
       "presentation": {
         "echo": true,
@@ -20,9 +20,9 @@
       }
     },
     {
-      "label": "Start MinerU FastAPI",
+      "label": "Start MinerU V1 API",
       "type": "shell",
-      "command": "python -m mineru.cli.fast_api --host 0.0.0.0 --port 8401 --enable-api-cache --max-convert-pages 1500 --batch-max-convert-pages 100 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "command": "mineru-kit api-server --host 0.0.0.0 --port 8401",
       "group": "build",
       "presentation": {
         "echo": true,
@@ -40,7 +40,7 @@
     {
       "label": "Start MinerU VLM Server",
       "type": "shell",
-      "command": "python -m mineru.cli.vlm_server --host 0.0.0.0 --port 8402 --data-parallel-size 1 --gpu-memory-utilization 0.4",
+      "command": "mineru-kit vlm-server --host 0.0.0.0 --port 8402 --data-parallel-size 1 --gpu-memory-utilization 0.4",
       "group": "build",
       "presentation": {
         "echo": true,

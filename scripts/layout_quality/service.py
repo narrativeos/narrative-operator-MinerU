@@ -1,6 +1,6 @@
 """版面质量 API 服务层：纯计算入口（不写文件、不打印 stdout）。
 
-供 FastAPI 端点（mineru/cli/fast_api.py）与其他程序化调用方使用。
+供 V1 解析 API（mineru/parser/api_server.py 的 layout_quality 输出格式）与其他程序化调用方使用。
 CLI（cli.py）继续使用 pipeline.run_book_qa（带 CSV 落盘与报告打印），
 两者的计算逻辑统一收敛在 analyze_book()，避免重复实现。
 """

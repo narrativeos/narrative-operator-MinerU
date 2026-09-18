@@ -71,7 +71,7 @@ mineru-kit parse document.pdf -o document.md --tier standard
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
-| `model.vlm.engine` | `auto` | 本地引擎选择：`auto/llama-cpp/vllm/lmdeploy`；设置远程 `server_url` 时不使用 |
+| `model.vlm.engine` | `auto` | 本地引擎选择：`auto/llama-cpp/vllm/lmdeploy/mlx`，MLX 仅显式使用；设置远程 `server_url` 时不使用 |
 | `model.vlm.server_url` | （未设置） | 远程 VLM 推理地址。必须是 HTTP(S)，不允许携带凭据、query 或 fragment；结尾的 `/v1` 会被去掉并保证以 `/` 结尾（保留反向代理路径前缀） |
 | `model.vlm.api_key` | （未设置） | 远程 VLM 服务的 Bearer Key；环境变量 `MINERU_MODEL_VLM_API_KEY` |
 | `model.vlm.model` | （未设置） | 请求远程服务使用的模型名；环境变量 `MINERU_MODEL_VLM_MODEL` |

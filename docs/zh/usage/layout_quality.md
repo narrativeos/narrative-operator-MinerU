@@ -81,10 +81,25 @@ python -m scripts.layout_quality.cli --demo
 | `--n-sigma` | 3.0 | 异常页检测 σ 阈值 |
 | `--name` | 父目录名 | 书名（仅单目录模式） |
 
-## FastAPI 接口
+## V1 API 输出
 
-`mineru-api` 服务（`mineru/cli/fast_api.py`）内置两个版面质量评分端点，
-将逐页指标、全书绝对评分与 QA 报告以 JSON 形式返回（只读计算，不写文件）：
+4.0 的 V1 解析 API（`mineru-api` / `mineru-kit api-server`，实现位于
+`mineru/parser/api_server.py`）将版面质量评分作为解析任务的输出格式
+`layout_quality` 提供：提交 `POST /v1/parse/jobs` 时在 `out_formats` 中包含
+`layout_quality`，任务完成后结果 ZIP 中会附带 `<书名>.layout_quality.json`
+（逐页指标、全书绝对评分与 QA 报告，只读计算，不写额外文件）。
+
+```bash
+# 提交解析任务并请求 layout_quality 输出
+curl -X POST "http://127.0.0.1:8401/v1/parse/jobs" \
+  -H "Content-Type: application/json" \
+  -d '{"file_id": "<upload_id>", "out_formats": ["markdown", "layout_quality"]}'
+```
+
+<details>
+<summary>3.x 历史端点（已移除）</summary>
+
+3.x 的 `mineru-api` 服务（`mineru/cli/fast_api.py`）曾内置两个版面质量评分端点：
 
 | 端点 | 说明 |
 | --- | --- |
@@ -162,6 +177,8 @@ curl -X POST "http://127.0.0.1:8401/tasks" \
 > - `scripts.layout_quality` 是仓库内开发工具包，若运行环境无法导入
 >   （如仅安装了 `mineru` 包的生产镜像），端点返回 501。
 > - 多文件任务返回 `{"task_id": ..., "books": [...]}`；单文件任务直接返回单书结果（含 `task_id` 字段）。
+
+</details>
 
 ## 输出
 

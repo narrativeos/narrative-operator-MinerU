@@ -50,7 +50,7 @@ RAGFlow 是一款开源 RAG（Retrieval-Augmented Generation）引擎与应用�
    cd uv_tools
    uv venv .venv
    source .venv/bin/activate
-   uv pip install -U "mineru[core]" -i https://mirrors.aliyun.com/pypi/simple
+   uv pip install -U "mineru" -i https://mirrors.aliyun.com/pypi/simple
    ```
 
 5. **退出并重启：**

@@ -39,7 +39,7 @@ model:
     engine: auto
 ```
 
-`small_backend` 可选 `auto/onnx/torch`；`engine` 可选 `auto/llama-cpp/vllm/lmdeploy`。macOS 默认使用 llama.cpp。
+`small_backend` 可选 `auto/onnx/torch`；`engine` 可选 `auto/llama-cpp/vllm/lmdeploy/mlx`，MLX 仅显式使用。macOS 默认使用 llama.cpp。
 
 ## 资源与平台边界
 
