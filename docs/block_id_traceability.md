@@ -1,10 +1,19 @@
 # block_id 溯源与页面类型标注说明（下游应用指南）
 
-**版本**: v1.2
-**日期**: 2026-09-18
+**版本**: v1.3
+**日期**: 2026-09-21
 **适用 MinerU**: 4.0.1（fork）
-**影响范围**: model_output.json, middle_json.json, content_list.json, content_list_v2.json, markdown（FULL 模式）
+**影响范围**: model_output.json, middle_json.json, structured_content.json, content_list.json, content_list_v2.json, markdown（FULL 模式）
 
+> **v1.3 变更**：`block_id` 升级为**一等协议字段**（docvortex >= 0.4.20）。
+> 1. **middle_json.json 与 structured_content.json 的每个 block 直接携带
+>    `block_id`**，与 model_output.json 严格一致，不再需要按
+>    「页码 + 块序号」反查映射表；
+> 2. `extensions.mineru_block_ids` 映射**保留**为兼容冗余（按原始块序号
+>    索引，乱码 block 删除后仍可能有空洞）；
+> 3. 视觉块（image/table/chart/code）重组后父块继承主体的 `block_id`，
+>    子块（caption/footnote）各自保留。
+>
 > **v1.2 变更**：
 > 1. 新增 [六、页面类型（page_type）标注](#六页面类型page_type标注) 章节，说明 4.0 下
 >    页面类型在各输出中的位置；
@@ -29,14 +38,15 @@
 
 ## 一、概述
 
-MinerU 4.0 的共享文档协议（MiddleJson）中 block 为严格 schema
-（`extra='forbid'`），不再携带 3.x 时代的 `block_id` 字段。本 fork 在
-**仅 PDF 解析路径**上重新引入 block 级溯源：
+本 fork 在 **仅 PDF 解析路径**上引入 block 级溯源：
 
 - 每个 block 分配一个 `block_id`（UUIDv5 字符串，36 字符）；
-- `block_id` 直接写入 `model_output.json` 的 block；
-- 严格产物（middle_json.json 等）通过顶层 `extensions.mineru_block_ids`
-  映射表按「页码 + 块序号」反查；
+- `block_id` 是 docvortex >= 0.4.20 MiddleJson block 的**一等可选字段**，
+  postprocess 自动透传，`model_output.json` / `middle_json.json` /
+  `structured_content.json` 三个产物中的 block 携带**严格一致**的
+  `block_id`；
+- 顶层 `extensions.mineru_block_ids` 映射表保留为兼容冗余（按原始块序号
+  索引）；
 - Content List V1/V2 的每个条目直接携带 `block_id` / `block_ids`。
 
 **非 PDF 输入（EPUB/HTML/OFD/Office/CSV 等）不分配 `block_id`**，
@@ -122,8 +132,7 @@ block 类型重分类（如 `text` → `paragraph_title`）均**不改变**已�
 
 ### 3.2 middle_json.json（MiddleJson）
 
-严格 schema 的 block **不携带** `block_id`；映射表位于顶层
-`extensions.mineru_block_ids`：
+每个 block 直接携带 `block_id`（与 model_output.json 严格一致）：
 
 ```json
 {
@@ -131,7 +140,7 @@ block 类型重分类（如 `text` → `paragraph_title`）均**不改变**已�
         {
             "page_idx": 0,
             "blocks": [
-                {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2], "content": [...]}
+                {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2], "content": [...], "block_id": "3f2c…"}
             ]
         }
     ],
@@ -143,11 +152,12 @@ block 类型重分类（如 `text` → `paragraph_title`）均**不改变**已�
 }
 ```
 
-映射结构：`{str(page_idx): {str(block_index): block_id}}`。
-反查方式：取 block 的 `page_idx` 与 `index` 字段作为两级 key。
+顶层 `extensions.mineru_block_ids` 映射保留为兼容冗余，结构
+`{str(page_idx): {str(block_index): block_id}}`，按**原始块序号**索引。
 
-> 注意：乱码 block 在分配 id **之前**被删除，因此 `block_index`
-> 可能出现**空洞**（如某页只有 `"0"`、`"2"`），属正常现象。
+> 注意：乱码 block 在分配 id **之前**被删除，因此映射中的 `block_index`
+> 可能出现**空洞**（如某页只有 `"0"`、`"2"`），属正常现象；
+> block 上的 `block_id` 字段不受影响。
 
 ### 3.3 content_list.json / content_list_v2.json
 
@@ -171,9 +181,10 @@ block 类型重分类（如 `text` → `paragraph_title`）均**不改变**已�
 
 ### 3.4 structured_content.json / markdown
 
-**不包含** `block_id`（structured_content 不输出 extensions）。
-需要溯源时请使用 `middle_json.json` 的 `extensions.mineru_block_ids` 反查。
-markdown 中的页面类型注释见 [六、页面类型标注](#六页面类型page_type标注)。
+structured_content.json 的每个 block 直接携带 `block_id`（与
+middle_json.json 严格一致）；不输出 extensions。
+markdown 不包含 `block_id`；页面类型注释见
+[六、页面类型标注](#六页面类型page_type标注)。
 
 ---
 
@@ -184,8 +195,9 @@ markdown 中的页面类型注释见 [六、页面类型标注](#六页面类型
 1. **稳定引用**：以 `block_id` 作为 block 的业务主键（附加文档级前缀）；
 2. **跨次 diff**：对同一文档两次解析结果按 `block_id` 对齐，
    id 相同即同一 block，可直接比较内容/几何变化；
-3. **反查链路**：`middle_json.json` block → `(page_idx, index)` →
-   `extensions.mineru_block_ids` → `block_id` → `model_output.json` 中的原始 block。
+3. **直接读取**：三个 JSON 产物的 block 上直接读 `block_id` 字段即可，
+   无需反查映射表；需要原始模型块时按 `block_id` 到
+   `model_output.json` 中定位。
 
 ### 4.2 示例代码
 
@@ -193,12 +205,10 @@ markdown 中的页面类型注释见 [六、页面类型标注](#六页面类型
 import json
 
 middle = json.loads(open("middle_json.json").read())
-block_ids = middle.get("extensions", {}).get("mineru_block_ids", {})
 
 for page in middle["pages"]:
-    page_map = block_ids.get(str(page["page_idx"]), {})
     for block in page["blocks"]:
-        block_id = page_map.get(str(block.get("index")))
+        block_id = block.get("block_id")
         if block_id:
             # 用 block_id 关联下游数据
             ...
@@ -215,9 +225,11 @@ for page in middle["pages"]:
 
 ## 五、常见问题
 
-**Q: 为什么 middle.json 的 block 上没有 block_id？**
-A: MinerU 4.0 共享协议对 block 使用严格 schema（禁止额外字段），
-fork 不修改共享协议，改为通过 `extensions.mineru_block_ids` 映射透传。
+**Q: middle_json.json / structured_content.json 的 block 上有 block_id 吗？**
+A: 有（docvortex >= 0.4.20 / 本 fork 对应版本起）。`block_id` 是
+MiddleJson block 的一等可选字段，三个 JSON 产物严格一致。
+旧版本（docvortex < 0.4.20）的产物中 block 上没有该字段，
+需通过 `extensions.mineru_block_ids` 映射反查。
 
 **Q: 同一页两个内容完全相同的 block，id 会冲突吗？**
 A: 正常布局下不会。bbox 参与身份，同页同内容但位置不同的 block id 必然不同；

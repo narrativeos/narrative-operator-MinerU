@@ -1146,6 +1146,7 @@ def test_aio_doc_analyze_runs_sync_entrypoint_in_thread_and_forwards_arguments(
         "source_context": None,
         "vlm_config": None,
         "source_properties": None,
+        "progress_callback": None,
     }
     assert observed["thread_id"] != caller_thread_id
 

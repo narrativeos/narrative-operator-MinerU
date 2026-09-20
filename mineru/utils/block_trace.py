@@ -3,26 +3,25 @@
 
 MinerU 4.0 的 ``doc_analyze`` 产出严格 ``ModelJson``（raw model_list 为
 ``list[list[dict]]``，block 含 ``type``/``index``/``bbox``/``content`` 等字段），
-再经 docvortex postprocess 转换为 ``MiddleJson``。``MiddleJson`` 的 block 使用
-``extra='forbid'``，无法携带自定义字段；而 ``ModelJson`` 的 pages 保留原始
-dict，允许额外字段。
+再经 docvortex postprocess 转换为 ``MiddleJson``。docvortex >= 0.4.20 的
+MiddleJson block 将 ``block_id`` 作为一等可选字段（``extra='forbid'`` 不变，
+字段本身被协议接受），postprocess 自动透传，因此
+``model_output.json`` / ``middle_json.json`` / ``structured_content.json``
+三个产物中的 block 携带严格一致的 ``block_id``。
 
 本模块提供：
 
 - :func:`assign_block_uuids_to_model_list`：为每个 block 原地写入 ``block_id``
-  （确定性 UUIDv5），使 ``model_output.json`` 中的 block 可被下游稳定引用。
+  （确定性 UUIDv5），使各产物中的 block 可被下游稳定引用。
   同一文档中身份（页码 + bbox + 内容摘要）相同的 block 在多次
   解析间始终得到相同 ``block_id``，便于跨次运行 diff 与追踪。
 - :func:`build_block_id_map`：生成 ``{page_idx: {block_index: block_id}}``
-  映射，写入 ``ModelJson.extensions["mineru_block_ids"]``，供
-  ``middle_json.json`` / ``structured_content.json`` 等严格产物做溯源。
-- :func:`strip_block_ids_from_model_list`：生成去除 ``block_id`` 的深拷贝，
-  用于 postprocess 前构造可被 ``MiddleJson`` 接受的输入。
+  映射，写入 ``ModelJson.extensions["mineru_block_ids"]``，作为 block 级
+  ``block_id`` 字段的兼容冗余映射（按原始块序号索引）。
 """
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import uuid
@@ -97,26 +96,7 @@ def build_block_id_map(model_list: list[list[dict]]) -> dict[str, dict[str, str]
     return mapping
 
 
-def strip_block_ids_from_model_list(model_list: list[list[dict]]) -> list[list[dict]]:
-    """返回去除 ``block_id`` 字段的深拷贝（不修改原列表）。
-
-    docvortex postprocess 的 ``MiddleJson`` 校验禁止 block 携带额外字段，
-    因此 postprocess 前必须使用本函数生成的干净副本。
-    """
-    clean: list[list[dict]] = []
-    for page_blocks in model_list:
-        clean_page: list[dict] = []
-        for block in page_blocks:
-            if isinstance(block, dict) and "block_id" in block:
-                clean_page.append({k: v for k, v in block.items() if k != "block_id"})
-            else:
-                clean_page.append(copy.deepcopy(block))
-        clean.append(clean_page)
-    return clean
-
-
 __all__ = [
     "assign_block_uuids_to_model_list",
     "build_block_id_map",
-    "strip_block_ids_from_model_list",
 ]

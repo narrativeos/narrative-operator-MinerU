@@ -1,11 +1,11 @@
 # Copyright (c) Opendatalab. All rights reserved.
 """Unit tests for block traceability utilities (MinerU 4.0 raw model_list)."""
+
 import unittest
 
 from mineru.utils.block_trace import (
     assign_block_uuids_to_model_list,
     build_block_id_map,
-    strip_block_ids_from_model_list,
 )
 
 
@@ -13,17 +13,23 @@ def _make_model_list() -> list[list[dict]]:
     """构造 4.0 格式的 raw model_list（2 页）。"""
     return [
         [
-            {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2],
-             "content": [{"type": "text", "content": "hello"}],
-             "lines": [{"bbox": [0.1, 0.1, 0.5, 0.2]}]},
-            {"type": "equation", "index": 1, "bbox": [0.3, 0.5, 0.7, 0.6],
-             "content": "\\frac{a}{b}",
-             "lines": [{"bbox": [0.3, 0.5, 0.7, 0.6]}]},
+            {
+                "type": "text",
+                "index": 0,
+                "bbox": [0.1, 0.1, 0.5, 0.2],
+                "content": [{"type": "text", "content": "hello"}],
+                "lines": [{"bbox": [0.1, 0.1, 0.5, 0.2]}],
+            },
+            {
+                "type": "equation",
+                "index": 1,
+                "bbox": [0.3, 0.5, 0.7, 0.6],
+                "content": "\\frac{a}{b}",
+                "lines": [{"bbox": [0.3, 0.5, 0.7, 0.6]}],
+            },
         ],
         [
-            {"type": "image_body", "index": 0, "bbox": [0.1, 0.1, 0.9, 0.5],
-             "image_path": "imgs/0.png",
-             "lines": []},
+            {"type": "image_body", "index": 0, "bbox": [0.1, 0.1, 0.9, 0.5], "image_path": "imgs/0.png", "lines": []},
         ],
     ]
 
@@ -97,12 +103,17 @@ class TestAssignBlockUuids(unittest.TestCase):
     def test_id_tolerates_bbox_jitter_below_precision(self):
         """bbox 抖动小于 1e-5（精度舍入范围内）时 id 保持不变。"""
         stable = [
-            [{"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2],
-              "content": [{"type": "text", "content": "hello"}]}]
+            [{"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2], "content": [{"type": "text", "content": "hello"}]}]
         ]
         jittered = [
-            [{"type": "text", "index": 0, "bbox": [0.100001, 0.099999, 0.500004, 0.199996],
-              "content": [{"type": "text", "content": "hello"}]}]
+            [
+                {
+                    "type": "text",
+                    "index": 0,
+                    "bbox": [0.100001, 0.099999, 0.500004, 0.199996],
+                    "content": [{"type": "text", "content": "hello"}],
+                }
+            ]
         ]
         assign_block_uuids_to_model_list(stable)
         assign_block_uuids_to_model_list(jittered)
@@ -111,18 +122,13 @@ class TestAssignBlockUuids(unittest.TestCase):
     def test_id_stable_when_index_shifts(self):
         """前序 block 增删导致 index 位移时，已有 block 的 id 保持不变。"""
         base = [
-            {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2],
-             "content": [{"type": "text", "content": "first"}]},
-            {"type": "text", "index": 1, "bbox": [0.1, 0.3, 0.5, 0.4],
-             "content": [{"type": "text", "content": "second"}]},
+            {"type": "text", "index": 0, "bbox": [0.1, 0.1, 0.5, 0.2], "content": [{"type": "text", "content": "first"}]},
+            {"type": "text", "index": 1, "bbox": [0.1, 0.3, 0.5, 0.4], "content": [{"type": "text", "content": "second"}]},
         ]
         shifted = [
-            {"type": "text", "index": 0, "bbox": [0.9, 0.9, 0.95, 0.95],
-             "content": [{"type": "text", "content": "inserted"}]},
-            {"type": "text", "index": 1, "bbox": [0.1, 0.1, 0.5, 0.2],
-             "content": [{"type": "text", "content": "first"}]},
-            {"type": "text", "index": 2, "bbox": [0.1, 0.3, 0.5, 0.4],
-             "content": [{"type": "text", "content": "second"}]},
+            {"type": "text", "index": 0, "bbox": [0.9, 0.9, 0.95, 0.95], "content": [{"type": "text", "content": "inserted"}]},
+            {"type": "text", "index": 1, "bbox": [0.1, 0.1, 0.5, 0.2], "content": [{"type": "text", "content": "first"}]},
+            {"type": "text", "index": 2, "bbox": [0.1, 0.3, 0.5, 0.4], "content": [{"type": "text", "content": "second"}]},
         ]
         assign_block_uuids_to_model_list([base])
         assign_block_uuids_to_model_list([shifted])
@@ -166,31 +172,30 @@ class TestBuildBlockIdMap(unittest.TestCase):
         self.assertEqual(build_block_id_map(model_list), {})
 
 
-class TestStripBlockIds(unittest.TestCase):
-    """测试 block_id 剥离（postprocess 前使用）。"""
+class TestBlockIdThroughPostprocess(unittest.TestCase):
+    """测试 block_id 作为一等字段透传 docvortex postprocess（>= 0.4.20）。"""
 
-    def test_removes_block_id(self):
+    def test_middle_json_blocks_carry_block_id(self):
+        from docvortex.postprocess.document import model_json_to_middle_json
+        from docvortex.schema import DocumentMetadata, MiddleJson, ModelJson, Producer
+
         model_list = _make_model_list()
         assign_block_uuids_to_model_list(model_list)
-        clean = strip_block_ids_from_model_list(model_list)
-        for page in clean:
-            for block in page:
-                self.assertNotIn("block_id", block)
-
-    def test_does_not_mutate_original(self):
-        model_list = _make_model_list()
-        assign_block_uuids_to_model_list(model_list)
-        first_id = model_list[0][0]["block_id"]
-        strip_block_ids_from_model_list(model_list)
-        self.assertEqual(model_list[0][0]["block_id"], first_id)
-
-    def test_preserves_other_fields(self):
-        model_list = _make_model_list()
-        assign_block_uuids_to_model_list(model_list)
-        clean = strip_block_ids_from_model_list(model_list)
-        self.assertEqual(clean[0][0]["content"], model_list[0][0]["content"])
-        self.assertEqual(clean[0][0]["bbox"], model_list[0][0]["bbox"])
-        self.assertEqual(clean[1][0]["image_path"], model_list[1][0]["image_path"])
+        model_json = ModelJson(
+            pages=model_list,
+            page_index_map=[],
+            metadata=DocumentMetadata(
+                file_suffix="pdf",
+                producer=Producer(name="mineru", version="test"),
+                document={"page_count": 2},
+            ),
+            extensions={},
+        )
+        middle_json = model_json_to_middle_json(model_json)
+        self.assertIsInstance(middle_json, MiddleJson)
+        for page_idx, page in enumerate(model_list):
+            for block, middle_block in zip(page, middle_json.pages[page_idx].blocks):
+                self.assertEqual(middle_block.block_id, block["block_id"])
 
 
 if __name__ == "__main__":
