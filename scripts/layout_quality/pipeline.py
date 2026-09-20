@@ -163,7 +163,7 @@ def run_book_level_pipeline(books, page_csv_paths=None, alpha=0.5, n_sigma=3.0,
 
     if not page_csv_paths:
         # CSV 输入模式: 合并逐页明细 (含书名列) 写入 out_dir
-        detail_cols = ['书名', '页码', '是否有效', '版面覆盖率', '文本块数'] + IND_NAMES
+        detail_cols = ['书名', '页码', 'page_idx', '是否有效', '版面覆盖率', '文本块数'] + IND_NAMES
         combined = pd.concat(
             [d.assign(书名=n) for n, d in details.items()], ignore_index=True)
         combined = combined[detail_cols]

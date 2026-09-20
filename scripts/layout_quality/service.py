@@ -89,6 +89,8 @@ def analyze_book(
         'pages': [
             {
                 '页码': p['page_no'],
+                # 0-based 源页号，与 MiddleJson 的 page_idx 直接对齐（页码 = page_idx + 1）。
+                'page_idx': p['page_no'] - 1,
                 '是否有效': '否' if p['page_no'] in dropped_nos else '是',
                 '版面覆盖率': (
                     None if p['coverage'] is None else round(float(p['coverage']), 4)

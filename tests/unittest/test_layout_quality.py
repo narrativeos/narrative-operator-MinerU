@@ -703,10 +703,10 @@ class TestBookQa(unittest.TestCase):
             detail, qa = run_book_qa(agg, csv_path=csv_path)
             self.assertEqual(len(detail), 6)
             self.assertEqual(detail.columns.tolist(),
-                             ['页码', '是否有效', '版面覆盖率', '文本块数'] + IND_NAMES)
+                             ['页码', 'page_idx', '是否有效', '版面覆盖率', '文本块数'] + IND_NAMES)
             self.assertTrue(os.path.isfile(csv_path))
             df = pd.read_csv(csv_path)
-            self.assertEqual(df.shape, (6, 4 + N_IND))
+            self.assertEqual(df.shape, (6, 5 + N_IND))
         self.assertIn('《solo》全书排版一致性质检报告', qa)
 
     def test_run_book_qa_without_csv(self):
@@ -857,6 +857,7 @@ class TestLayoutQualityService(unittest.TestCase):
         self.assertEqual(len(result['fingerprint']), N_IND)
         self.assertEqual(len(result['pages']), 1)
         self.assertEqual(result['pages'][0]['页码'], 1)
+        self.assertEqual(result['pages'][0]['page_idx'], 0)
         self.assertEqual(result['pages'][0]['是否有效'], '是')
         self.assertIn('《solo》', result['qa_report'])
 
