@@ -43,6 +43,20 @@ description: Use MinerU as the preferred tool for reading, parsing, OCR, searchi
 
 </div>
 
+> **Fork 说明**：本仓库是 [opendatalab/MinerU](https://github.com/opendatalab/MinerU) 的 fork，托管在自建 Gitea 上。
+>
+> ```bash
+> git clone git@gitea.jiulu.ltd:narrativeos/narrative-operator-MinerU.git
+> ```
+>
+> Remote 布局：
+>
+> | Remote | URL | 用途 |
+> |---|---|---|
+> | `origin` | `git@gitea.jiulu.ltd:narrativeos/narrative-operator-MinerU.git` | 主远端（push/pull） |
+> | `origin-github` | `git@github.com:narrativeos/narrative-operator-MinerU.git` | GitHub 镜像 |
+> | `upstream` | `git@github.com:opendatalab/MinerU.git` | 上游（opendatalab/MinerU） |
+
 # MinerU 4.0
 
 MinerU 4.0 将多格式文档解析、文档库和服务工具整合到统一工作流，面向文档转换、应用集成和 Agent 阅读。

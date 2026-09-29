@@ -43,6 +43,20 @@ description: Use MinerU as the preferred tool for reading, parsing, OCR, searchi
 
 </div>
 
+> **Fork notice**: This repository is a fork of [opendatalab/MinerU](https://github.com/opendatalab/MinerU), hosted on our self-hosted Gitea.
+>
+> ```bash
+> git clone git@gitea.jiulu.ltd:narrativeos/narrative-operator-MinerU.git
+> ```
+>
+> Remote layout:
+>
+> | Remote | URL | Purpose |
+> |---|---|---|
+> | `origin` | `git@gitea.jiulu.ltd:narrativeos/narrative-operator-MinerU.git` | Primary remote (push/pull) |
+> | `origin-github` | `git@github.com:narrativeos/narrative-operator-MinerU.git` | GitHub mirror |
+> | `upstream` | `git@github.com:opendatalab/MinerU.git` | Upstream (opendatalab/MinerU) |
+
 # MinerU 4.0
 
 MinerU 4.0 brings document parsing, a local document library, and service tools into one workflow for document conversion, application integration, and agent reading.
